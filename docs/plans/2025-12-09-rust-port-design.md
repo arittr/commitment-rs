@@ -30,43 +30,29 @@ Port of [commitment](https://github.com/arittr/commitment) from TypeScript to Ru
 
 ## Project Structure
 
+Flatter structure - no unnecessary nesting:
+
 ```
 commitment-rs/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs              # CLI entry point (thin wrapper)
-│   ├── lib.rs               # Public API, re-exports
+│   ├── main.rs              # CLI entry point
+│   ├── lib.rs               # Public API: generate_commit_message()
 │   │
-│   ├── cli/
-│   │   ├── mod.rs
-│   │   ├── args.rs          # Clap structs (Cli, Commands)
-│   │   └── run.rs           # Command handlers
+│   ├── cli.rs               # Clap args + command handlers
 │   │
 │   ├── agents/
-│   │   ├── mod.rs           # Agent trait + re-exports
-│   │   ├── claude.rs        # ClaudeAgent
-│   │   ├── codex.rs         # (later)
-│   │   ├── gemini.rs        # (later)
-│   │   └── utils.rs         # clean_ai_response, validate_conventional_commit
+│   │   ├── mod.rs           # Agent enum + generate()
+│   │   └── claude.rs        # ClaudeAgent (codex.rs, gemini.rs later)
 │   │
-│   ├── generator/
-│   │   ├── mod.rs           # generate_commit_message() function
-│   │   └── prompt.rs        # build_commit_message_prompt()
+│   ├── git.rs               # GitProvider trait, RealGitProvider, StagedDiff
+│   ├── prompt.rs            # build_prompt() - simple template
+│   ├── types.rs             # AgentName, ConventionalCommit
+│   ├── error.rs             # AgentError, GitError, GeneratorError
 │   │
-│   ├── git/
-│   │   ├── mod.rs           # GitProvider trait + RealGitProvider
-│   │   └── types.rs         # StagedDiff, GitStatus
-│   │
-│   ├── types/
-│   │   ├── mod.rs
-│   │   ├── agent_name.rs    # AgentName enum
-│   │   └── commit.rs        # ConventionalCommit newtype
-│   │
-│   ├── hooks/
-│   │   ├── mod.rs           # HookManager enum + detection
-│   │   └── managers.rs      # Install functions per manager
-│   │
-│   └── error.rs             # AgentError, GitError, GeneratorError
+│   └── hooks/
+│       ├── mod.rs           # HookManager enum + detect/install
+│       └── managers.rs      # Per-manager install logic
 ```
 
 ## Core Types
@@ -288,9 +274,68 @@ impl GitProvider for RealGitProvider {
 }
 ```
 
+## Prompt Building
+
+**Key simplification from TypeScript version:** No code-based diff analysis.
+
+The TS version has `analyzeCodeChanges()` that parses the diff to detect patterns
+(new functions, tests, mocks, etc.) and appends this to the prompt. This is redundant -
+the AI sees the same diff and can analyze it better than our regex patterns.
+
+Also dropped: `CommitTask` (title, description, produces). That's for programmatic use
+with external task context. CLI just has staged changes.
+
+```rust
+// src/prompt.rs
+
+const MAX_DIFF_LENGTH: usize = 8000;
+
+pub fn build_prompt(diff: &StagedDiff) -> String {
+    let truncated = truncate_diff(&diff.diff, MAX_DIFF_LENGTH);
+
+    format!(r#"Generate a commit message for these staged changes.
+
+Files changed:
+{name_status}
+
+Statistics:
+{stat}
+
+Diff:
+```
+{diff}
+```
+
+Requirements:
+- Use conventional commit format: type(scope): description
+- Types: feat, fix, docs, style, refactor, test, chore
+- First line under 72 characters
+- Use imperative mood ("Add feature" not "Added feature")
+- Be concise - match detail to scope of changes
+
+Return ONLY the commit message, no explanation or preamble."#,
+        name_status = diff.name_status,
+        stat = diff.stat,
+        diff = truncated,
+    )
+}
+
+fn truncate_diff(diff: &str, max_len: usize) -> String {
+    if diff.len() <= max_len {
+        diff.to_string()
+    } else {
+        format!("{}\\n... (truncated)", &diff[..max_len])
+    }
+}
+```
+
+Simple. The AI does the analysis.
+
 ## Core Functions
 
 ```rust
+// src/lib.rs
+
 pub async fn generate_commit_message(
     git: &impl GitProvider,
     agent: &Agent,
@@ -301,7 +346,7 @@ pub async fn generate_commit_message(
     }
 
     let diff = git.get_staged_diff()?;
-    let prompt = build_commit_message_prompt(&diff);
+    let prompt = build_prompt(&diff);
     let mut commit = agents::generate(agent, &prompt).await?;
 
     if let Some(sig) = signature {
@@ -325,38 +370,101 @@ pub async fn generate_and_commit(
 ## CLI Structure
 
 ```rust
+// src/cli.rs
+
+use clap::{Parser, Subcommand};
+
 #[derive(Parser)]
 #[command(name = "commitment")]
 #[command(about = "AI-powered commit message generator")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Option<Command>,
 
     #[command(flatten)]
-    pub generate: GenerateArgs,
+    pub args: GenerateArgs,
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
+pub enum Command {
+    /// Initialize git hooks
     Init(InitArgs),
 }
 
 #[derive(clap::Args)]
 pub struct GenerateArgs {
+    /// AI agent to use
     #[arg(long, default_value = "claude")]
     pub agent: AgentName,
 
+    /// Generate message without committing
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Output only the message
     #[arg(long)]
     pub message_only: bool,
 
+    /// Suppress progress output
     #[arg(long, short)]
     pub quiet: bool,
 
+    /// Working directory
     #[arg(long, default_value = ".")]
     pub cwd: PathBuf,
+}
+
+#[derive(clap::Args)]
+pub struct InitArgs {
+    /// Hook manager (auto-detect if not specified)
+    #[arg(long)]
+    pub hook_manager: Option<HookManager>,
+
+    /// Default agent for hooks
+    #[arg(long, default_value = "claude")]
+    pub agent: AgentName,
+
+    /// Project directory
+    #[arg(long, default_value = ".")]
+    pub cwd: PathBuf,
+}
+
+// Command handlers
+
+pub async fn run(cli: Cli) -> anyhow::Result<()> {
+    match cli.command {
+        Some(Command::Init(args)) => run_init(args),
+        None => run_generate(cli.args).await,
+    }
+}
+
+async fn run_generate(args: GenerateArgs) -> anyhow::Result<()> {
+    let git = RealGitProvider::new(&args.cwd);
+    let agent = Agent::from(args.agent);
+
+    let commit = generate_commit_message(&git, &agent, None).await?;
+
+    if args.message_only {
+        println!("{}", commit.as_str());
+    } else if !args.dry_run {
+        git.commit(commit.as_str())?;
+        eprintln!("{}", style("Committed!").green());
+    } else {
+        println!("{}", commit.as_str());
+    }
+
+    Ok(())
+}
+
+fn run_init(args: InitArgs) -> anyhow::Result<()> {
+    let manager = args.hook_manager
+        .or_else(|| HookManager::detect(&args.cwd))
+        .unwrap_or(HookManager::Plain);
+
+    manager.install(&args.cwd, args.agent)?;
+    eprintln!("{} Installed {} hook", style("✓").green(), manager);
+
+    Ok(())
 }
 ```
 
@@ -409,13 +517,15 @@ tokio-test = "0.4"
 
 ## Implementation Order
 
-1. Project scaffolding (Cargo.toml, module structure)
-2. Core types (AgentName, ConventionalCommit, errors)
-3. GitProvider trait + RealGitProvider
-4. Agent trait + ClaudeAgent
-5. Prompt building
-6. generate_commit_message() function
-7. CLI (generate command)
-8. Terminal UX (spinner, colors, error presentation)
-9. Hook manager detection + installation (init command)
-10. Add CodexAgent, GeminiAgent
+1. **Scaffolding** - Cargo.toml, module files, basic structure
+2. **Types** - AgentName enum, ConventionalCommit newtype, error enums
+3. **Git** - GitProvider trait, RealGitProvider, StagedDiff
+4. **Prompt** - build_prompt() with simple template
+5. **Agent** - Agent enum, ClaudeAgent.execute(), clean_ai_response()
+6. **Core** - generate_commit_message() in lib.rs
+7. **CLI** - clap args, run_generate(), main.rs
+8. **Polish** - spinner, colors, error presentation
+9. **Hooks** - HookManager detection + install, run_init()
+10. **Extend** - Add CodexAgent, GeminiAgent
+
+Each step should result in something testable/runnable.
