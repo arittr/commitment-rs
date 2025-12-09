@@ -21,7 +21,7 @@ Port of [commitment](https://github.com/arittr/commitment) from TypeScript to Ru
 | Async runtime | Tokio | Learning goal; industry standard |
 | CLI parsing | clap (derive) | Most popular, good docs, derive teaches macro patterns |
 | Error handling | thiserror + anyhow | thiserror for domain errors, anyhow at CLI boundary |
-| Agent abstraction | Trait with defaults | Idiomatic Rust; replaces TS class inheritance |
+| Agent abstraction | Enum dispatch | Known variants; no boxing; exhaustive matching |
 | Validation | Newtype pattern | "Parse, don't validate" - invalid states unrepresentable |
 | Terminal output | console + indicatif | Same author, work well together, widely used |
 | Crate structure | lib.rs + main.rs | Standard pattern; testable, documentable |
@@ -169,29 +169,97 @@ pub enum GeneratorError {
 
 CLI layer handles error presentation with actionable hints.
 
-## Agent Trait
+## Agent Enum
+
+Using an enum instead of trait objects - more idiomatic when variants are known upfront.
+No `async_trait` crate needed, no boxing overhead, exhaustive matching.
 
 ```rust
-#[async_trait]
-pub trait Agent: Send + Sync {
-    fn name(&self) -> AgentName;
+// src/agents/mod.rs
 
-    async fn execute(&self, prompt: &str) -> Result<String, AgentError>;
+pub struct ClaudeAgent;
+pub struct CodexAgent;
+pub struct GeminiAgent;
 
-    fn clean_response(&self, raw: &str) -> String {
+/// All supported AI agents
+pub enum Agent {
+    Claude(ClaudeAgent),
+    Codex(CodexAgent),
+    Gemini(GeminiAgent),
+}
+
+impl Agent {
+    pub fn name(&self) -> AgentName {
+        match self {
+            Self::Claude(_) => AgentName::Claude,
+            Self::Codex(_) => AgentName::Codex,
+            Self::Gemini(_) => AgentName::Gemini,
+        }
+    }
+
+    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+        match self {
+            Self::Claude(a) => a.execute(prompt).await,
+            Self::Codex(a) => a.execute(prompt).await,
+            Self::Gemini(a) => a.execute(prompt).await,
+        }
+    }
+
+    pub fn clean_response(&self, raw: &str) -> String {
+        // All agents use same cleaning for now
         clean_ai_response(raw)
     }
 }
 
-/// Template method as free function (not overridable)
-pub async fn generate(
-    agent: &dyn Agent,
-    prompt: &str,
-) -> Result<ConventionalCommit, AgentError> {
+/// Orchestrates: execute → clean → validate
+pub async fn generate(agent: &Agent, prompt: &str) -> Result<ConventionalCommit, AgentError> {
     let raw = agent.execute(prompt).await?;
     let cleaned = agent.clean_response(&raw);
     ConventionalCommit::validate(&cleaned)
-        .map_err(|e| AgentError::MalformedResponse { raw: cleaned })
+        .map_err(|_| AgentError::MalformedResponse { raw: cleaned })
+}
+
+/// Factory from CLI arg
+impl From<AgentName> for Agent {
+    fn from(name: AgentName) -> Self {
+        match name {
+            AgentName::Claude => Self::Claude(ClaudeAgent),
+            AgentName::Codex => Self::Codex(CodexAgent),
+            AgentName::Gemini => Self::Gemini(GeminiAgent),
+        }
+    }
+}
+```
+
+Each agent struct implements its own `execute`:
+
+```rust
+// src/agents/claude.rs
+
+impl ClaudeAgent {
+    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+        // Check availability
+        check_command_exists("claude").await?;
+
+        // Run: echo "$prompt" | claude --print
+        let output = tokio::process::Command::new("claude")
+            .arg("--print")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+            .await?;
+
+        // Handle result
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            Err(AgentError::ExecutionFailed {
+                source: std::io::Error::other("non-zero exit"),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+        }
+    }
 }
 ```
 
@@ -225,7 +293,7 @@ impl GitProvider for RealGitProvider {
 ```rust
 pub async fn generate_commit_message(
     git: &impl GitProvider,
-    agent: &dyn Agent,
+    agent: &Agent,
     signature: Option<&str>,
 ) -> Result<ConventionalCommit, GeneratorError> {
     if !git.has_staged_changes()? {
@@ -245,7 +313,7 @@ pub async fn generate_commit_message(
 
 pub async fn generate_and_commit(
     git: &impl GitProvider,
-    agent: &dyn Agent,
+    agent: &Agent,
     signature: Option<&str>,
 ) -> Result<(), GeneratorError> {
     let commit = generate_commit_message(git, agent, signature).await?;
@@ -326,7 +394,6 @@ path = "src/lib.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process"] }
-async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 anyhow = "1"
