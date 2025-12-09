@@ -41,6 +41,42 @@ pub enum GitError {
     Io(#[from] std::io::Error),
 }
 
+/// Errors from git hook installation
+#[derive(Error, Debug)]
+pub enum HookError {
+    /// Hook manager detection failed
+    #[error("failed to detect hook manager")]
+    DetectionFailed,
+
+    /// Hook configuration file not found
+    #[error("hook config file not found: {path}")]
+    ConfigNotFound { path: String },
+
+    /// Failed to parse hook configuration
+    #[error("failed to parse hook config: {reason}")]
+    ConfigParseFailed { reason: String },
+
+    /// Failed to write hook configuration
+    #[error("failed to write hook config: {reason}")]
+    ConfigWriteFailed { reason: String },
+
+    /// Failed to create hook script
+    #[error("failed to create hook script: {path}")]
+    ScriptCreationFailed { path: String },
+
+    /// Failed to make hook script executable
+    #[error("failed to make hook script executable: {path}")]
+    ChmodFailed { path: String },
+
+    /// Git directory resolution failed
+    #[error("failed to resolve git directory")]
+    GitDirResolutionFailed,
+
+    /// I/O error during hook operation
+    #[error("I/O error during hook operation")]
+    Io(#[from] std::io::Error),
+}
+
 /// Errors from commit message generation
 #[derive(Error, Debug)]
 pub enum GeneratorError {
@@ -162,11 +198,39 @@ mod tests {
     }
 
     #[test]
+    fn hook_error_detection_failed_display() {
+        let err = HookError::DetectionFailed;
+        let msg = err.to_string();
+        assert!(msg.contains("failed to detect hook manager"));
+    }
+
+    #[test]
+    fn hook_error_config_not_found_display() {
+        let err = HookError::ConfigNotFound {
+            path: "lefthook.yml".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("hook config file not found"));
+        assert!(msg.contains("lefthook.yml"));
+    }
+
+    #[test]
+    fn hook_error_config_parse_failed_display() {
+        let err = HookError::ConfigParseFailed {
+            reason: "invalid yaml".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("failed to parse hook config"));
+        assert!(msg.contains("invalid yaml"));
+    }
+
+    #[test]
     fn error_types_implement_error_trait() {
         // Verify all error types implement std::error::Error
         fn assert_error<T: std::error::Error>() {}
         assert_error::<AgentError>();
         assert_error::<GitError>();
+        assert_error::<HookError>();
         assert_error::<GeneratorError>();
     }
 
@@ -180,6 +244,9 @@ mod tests {
 
         let git_err = GitError::NoStagedChanges;
         assert!(format!("{:?}", git_err).contains("NoStagedChanges"));
+
+        let hook_err = HookError::DetectionFailed;
+        assert!(format!("{:?}", hook_err).contains("DetectionFailed"));
 
         let gen_err = GeneratorError::Validation("test".to_string());
         assert!(format!("{:?}", gen_err).contains("Validation"));

@@ -1,6 +1,7 @@
 use crate::agents::Agent;
 use crate::error::{AgentError, GeneratorError, GitError};
 use crate::git::{GitProvider, RealGitProvider};
+use crate::hooks::{HookManager, detect_hook_manager, install_hook};
 use crate::types::AgentName;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -43,7 +44,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize git hooks (coming in Phase 5)
+    /// Initialize git hooks for automatic commit message generation
     Init {
         /// Override hook manager auto-detection
         #[arg(long)]
@@ -174,9 +175,46 @@ pub async fn run_generate(args: GenerateArgs) -> Result<()> {
     }
 }
 
-/// Run the init command (stub for Phase 5)
-pub async fn run_init(_hook_manager: Option<String>, _agent: String) -> Result<()> {
-    println!("Hook initialization coming in Phase 5");
+/// Run the init command
+pub async fn run_init(hook_manager: Option<String>, agent: String) -> Result<()> {
+    // Parse agent name
+    let agent_name: AgentName = agent
+        .parse()
+        .context(format!("Invalid agent name '{}'", agent))?;
+
+    // Determine hook manager (detect or use specified)
+    let manager = if let Some(manager_str) = hook_manager {
+        // User specified a manager
+        manager_str
+            .parse::<HookManager>()
+            .context(format!("Invalid hook manager '{}'", manager_str))?
+    } else {
+        // Auto-detect hook manager
+        let cwd = std::env::current_dir().context("Failed to get current directory")?;
+        detect_hook_manager(&cwd).unwrap_or(HookManager::PlainGit)
+    };
+
+    eprintln!(
+        "{} Installing {} hook for agent {}...",
+        style("→").blue(),
+        manager,
+        agent_name
+    );
+
+    // Install hook
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    install_hook(manager, &cwd, &agent_name).context("Failed to install hook")?;
+
+    eprintln!("{} Hook installed successfully", style("✓").green().bold());
+    eprintln!();
+    eprintln!("  Manager: {}", manager);
+    eprintln!("  Agent: {}", agent_name);
+    eprintln!();
+    eprintln!(
+        "{} Commit messages will now be generated automatically",
+        style("→").blue()
+    );
+
     Ok(())
 }
 
