@@ -73,7 +73,7 @@ pub struct ConventionalCommit {
 impl ConventionalCommit {
     /// Validate and construct a conventional commit message
     ///
-    /// Format: <type>(<scope>): <description>
+    /// Format: `<type>(<scope>): <description>`
     /// - type: feat, fix, docs, style, refactor, test, chore, perf, build, ci, revert
     /// - scope: optional, e.g., (api), (cli)
     /// - description: required

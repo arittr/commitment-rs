@@ -2,7 +2,7 @@ use crate::types::AgentName;
 use thiserror::Error;
 
 /// Errors from AI agent execution
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum AgentError {
     /// Agent binary not found in PATH
     #[error("agent `{agent}` not found in PATH")]
@@ -44,11 +44,11 @@ pub enum GitError {
 /// Errors from commit message generation
 #[derive(Error, Debug)]
 pub enum GeneratorError {
-    /// Agent error (with automatic conversion via #[from])
+    /// Agent error (with automatic conversion via `#[from]`)
     #[error(transparent)]
     Agent(#[from] AgentError),
 
-    /// Git error (with automatic conversion via #[from])
+    /// Git error (with automatic conversion via `#[from]`)
     #[error(transparent)]
     Git(#[from] GitError),
 
