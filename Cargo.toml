@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/arittr/commitment-rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time"] }
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 anyhow = "1"
