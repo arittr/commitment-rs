@@ -7,6 +7,10 @@ description = "AI-powered commit message generator using local AI CLI tools"
 license = "MIT"
 repository = "https://github.com/arittr/commitment-rs"
 
+[[bin]]
+name = "commitment"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time"] }
 clap = { version = "4", features = ["derive"] }
