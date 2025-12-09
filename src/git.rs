@@ -1,11 +1,7 @@
 use crate::error::GitError;
+use crate::types::StagedDiff;
 
 // Git module - stubs for Phase 1
-
-// Placeholder StagedDiff struct
-pub struct StagedDiff {
-    pub diff: String,
-}
 
 // GitProvider trait - stub
 pub trait GitProvider {

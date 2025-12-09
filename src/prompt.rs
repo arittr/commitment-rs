@@ -1,4 +1,4 @@
-use crate::git::StagedDiff;
+use crate::types::StagedDiff;
 
 // Prompt module - stub for Phase 1
 
