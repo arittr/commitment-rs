@@ -8,7 +8,7 @@ This file provides guidance to Claude Code and other AI coding agents when worki
 
 **Design Philosophy:** Functions over structs. Enum dispatch over trait objects. Newtypes for validation. Let the AI analyze diffs (no complex pattern detection in code).
 
-**Constitution:** See `docs/constitution.md` for architectural rules and patterns.
+**Constitution:** See `@docs/constitutions/current/` for architectural rules and patterns.
 
 ## Development Commands
 
