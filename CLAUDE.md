@@ -12,6 +12,16 @@ This file provides guidance to Claude Code and other AI coding agents when worki
 
 ## Development Commands
 
+### Setup
+- **install**: `cargo build`
+
+### Quality Checks
+- **test**: `cargo test`
+- **lint**: `cargo clippy -- -D warnings`
+- **format**: `cargo fmt -- --check`
+- **build**: `cargo build`
+
+### Build
 ```bash
 # Build
 cargo build              # Debug build
