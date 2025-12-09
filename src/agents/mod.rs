@@ -1,4 +1,6 @@
 pub mod claude;
+pub mod codex;
+pub mod gemini;
 
 use crate::error::AgentError;
 use crate::types::AgentName;
@@ -33,6 +35,8 @@ static MULTIPLE_NEWLINES: Lazy<Regex> =
 /// - No async_trait needed
 pub enum Agent {
     Claude(claude::ClaudeAgent),
+    Codex(codex::CodexAgent),
+    Gemini(gemini::GeminiAgent),
 }
 
 impl Agent {
@@ -42,6 +46,8 @@ impl Agent {
     pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
         match self {
             Self::Claude(agent) => agent.execute(prompt).await,
+            Self::Codex(agent) => agent.execute(prompt).await,
+            Self::Gemini(agent) => agent.execute(prompt).await,
         }
     }
 
@@ -49,6 +55,8 @@ impl Agent {
     pub fn name(&self) -> AgentName {
         match self {
             Self::Claude(_) => AgentName::Claude,
+            Self::Codex(_) => AgentName::Codex,
+            Self::Gemini(_) => AgentName::Gemini,
         }
     }
 }
@@ -57,9 +65,8 @@ impl From<AgentName> for Agent {
     fn from(name: AgentName) -> Self {
         match name {
             AgentName::Claude => Self::Claude(claude::ClaudeAgent),
-            // Codex and Gemini will be added in Phase 5
-            AgentName::Codex => panic!("Codex agent not yet implemented"),
-            AgentName::Gemini => panic!("Gemini agent not yet implemented"),
+            AgentName::Codex => Self::Codex(codex::CodexAgent),
+            AgentName::Gemini => Self::Gemini(gemini::GeminiAgent),
         }
     }
 }
@@ -250,9 +257,21 @@ This implements JWT-based authentication.
     }
 
     #[test]
-    fn agent_name_returns_correct_variant() {
+    fn agent_name_returns_correct_variant_claude() {
         let agent = Agent::Claude(claude::ClaudeAgent);
         assert_eq!(agent.name(), AgentName::Claude);
+    }
+
+    #[test]
+    fn agent_name_returns_correct_variant_codex() {
+        let agent = Agent::Codex(codex::CodexAgent);
+        assert_eq!(agent.name(), AgentName::Codex);
+    }
+
+    #[test]
+    fn agent_name_returns_correct_variant_gemini() {
+        let agent = Agent::Gemini(gemini::GeminiAgent);
+        assert_eq!(agent.name(), AgentName::Gemini);
     }
 
     #[test]
@@ -262,14 +281,14 @@ This implements JWT-based authentication.
     }
 
     #[test]
-    #[should_panic(expected = "Codex agent not yet implemented")]
-    fn agent_from_agent_name_codex_panics() {
-        let _agent = Agent::from(AgentName::Codex);
+    fn agent_from_agent_name_codex() {
+        let agent = Agent::from(AgentName::Codex);
+        assert_eq!(agent.name(), AgentName::Codex);
     }
 
     #[test]
-    #[should_panic(expected = "Gemini agent not yet implemented")]
-    fn agent_from_agent_name_gemini_panics() {
-        let _agent = Agent::from(AgentName::Gemini);
+    fn agent_from_agent_name_gemini() {
+        let agent = Agent::from(AgentName::Gemini);
+        assert_eq!(agent.name(), AgentName::Gemini);
     }
 }
