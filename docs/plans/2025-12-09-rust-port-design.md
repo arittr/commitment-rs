@@ -91,8 +91,18 @@ pub struct ConventionalCommit {
 
 impl ConventionalCommit {
     pub fn validate(msg: &str) -> Result<Self, CommitValidationError> {
-        // Validate conventional commit format
-        // type(scope): description
+        // Pattern: type(scope?): description
+        // Types: feat, fix, docs, style, refactor, test, chore, perf, build, ci
+        static PATTERN: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"^(feat|fix|docs|style|refactor|test|chore|perf|build|ci)(\(.+\))?:\s*\S+")
+                .unwrap()
+        });
+
+        if PATTERN.is_match(msg) {
+            Ok(Self { raw: msg.to_string() })
+        } else {
+            Err(CommitValidationError::InvalidFormat(msg.to_string()))
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -217,35 +227,74 @@ impl From<AgentName> for Agent {
 }
 ```
 
-Each agent struct implements its own `execute`:
+Each agent struct implements its own `execute` with agent-specific CLI invocation:
 
 ```rust
 // src/agents/claude.rs
-
 impl ClaudeAgent {
     pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
-        // Check availability
         check_command_exists("claude").await?;
 
-        // Run: echo "$prompt" | claude --print
-        let output = tokio::process::Command::new("claude")
-            .arg("--print")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()?
-            .wait_with_output()
-            .await?;
-
-        // Handle result
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).to_string())
-        } else {
-            Err(AgentError::ExecutionFailed {
-                source: std::io::Error::other("non-zero exit"),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            })
-        }
+        // claude --print with prompt via stdin
+        run_command("claude", &["--print"], Some(prompt), TIMEOUT).await
     }
+}
+
+// src/agents/codex.rs
+impl CodexAgent {
+    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+        check_command_exists("codex").await?;
+
+        // codex exec with prompt via stdin
+        // --skip-git-repo-check allows running outside git repos
+        run_command("codex", &["exec", "--skip-git-repo-check"], Some(prompt), TIMEOUT).await
+    }
+}
+
+// src/agents/gemini.rs
+impl GeminiAgent {
+    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+        check_command_exists("gemini").await?;
+
+        // gemini -p with prompt as argument (NOT stdin!)
+        run_command("gemini", &["-p", prompt], None, TIMEOUT).await
+    }
+}
+
+const TIMEOUT: Duration = Duration::from_secs(120);
+```
+
+## Response Cleaning
+
+Order matters - cleaning steps must happen in this sequence:
+
+```rust
+// src/agents/mod.rs
+
+pub fn clean_ai_response(raw: &str) -> String {
+    let mut s = raw.to_string();
+
+    // 1. Extract between markers (if present)
+    //    <<<COMMIT_MESSAGE_START>>> ... <<<COMMIT_MESSAGE_END>>>
+    s = extract_between_markers(&s);
+
+    // 2. Remove markdown code blocks (```...```)
+    //    MUST happen before preamble removal
+    s = remove_code_blocks(&s);
+
+    // 3. Remove AI preambles
+    //    "here is the commit message:", "commit message:", etc.
+    s = remove_preambles(&s);
+
+    // 4. Remove thinking tags
+    //    <thinking>...</thinking> and "thinking:" prefix
+    s = remove_thinking_tags(&s);
+
+    // 5. Collapse excessive newlines (3+ → 2)
+    s = collapse_newlines(&s);
+
+    // 6. Trim
+    s.trim().to_string()
 }
 ```
 
@@ -409,6 +458,10 @@ pub struct GenerateArgs {
     #[arg(long, short)]
     pub quiet: bool,
 
+    /// Show debug output
+    #[arg(long, short)]
+    pub verbose: bool,
+
     /// Working directory
     #[arg(long, default_value = ".")]
     pub cwd: PathBuf,
@@ -471,6 +524,8 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
 ## Hook Manager
 
 ```rust
+// src/hooks/mod.rs
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookManager {
     Lefthook,
@@ -480,8 +535,89 @@ pub enum HookManager {
 }
 
 impl HookManager {
-    pub fn detect(project_dir: &Path) -> Option<Self>;
-    pub fn install(&self, project_dir: &Path, agent: AgentName) -> Result<(), HookError>;
+    /// Detect hook manager in project
+    pub fn detect(project_dir: &Path) -> Option<Self> {
+        // 1. Lefthook: check multiple config filenames
+        for name in ["lefthook.yml", ".lefthook.yml", "lefthook.yaml", ".lefthook.yaml"] {
+            if project_dir.join(name).exists() {
+                return Some(Self::Lefthook);
+            }
+        }
+
+        // 2. Husky: check for .husky directory
+        if project_dir.join(".husky").is_dir() {
+            return Some(Self::Husky);
+        }
+
+        // 3. simple-git-hooks: check package.json
+        if let Ok(pkg) = read_package_json(project_dir) {
+            if pkg.simple_git_hooks.is_some()
+                || pkg.dev_dependencies.contains_key("simple-git-hooks")
+                || pkg.dependencies.contains_key("simple-git-hooks")
+            {
+                return Some(Self::SimpleGitHooks);
+            }
+        }
+
+        None  // Caller defaults to Plain
+    }
+
+    pub fn install(&self, project_dir: &Path, agent: AgentName) -> Result<(), HookError> {
+        match self {
+            Self::Lefthook => install_lefthook(project_dir, agent),
+            Self::Husky => install_husky(project_dir, agent),
+            Self::SimpleGitHooks => install_simple_git_hooks(project_dir, agent),
+            Self::Plain => install_plain_hook(project_dir, agent),
+        }
+    }
+}
+```
+
+### Plain Git Hook (with worktree support)
+
+```rust
+fn install_plain_hook(project_dir: &Path, agent: AgentName) -> Result<(), HookError> {
+    // Handle git worktrees: .git can be a file containing "gitdir: /path/to/worktree"
+    let git_path = project_dir.join(".git");
+    let git_dir = if git_path.is_file() {
+        // Parse gitdir from .git file
+        let content = fs::read_to_string(&git_path)?;
+        let gitdir = content
+            .lines()
+            .find(|l| l.starts_with("gitdir:"))
+            .and_then(|l| l.strip_prefix("gitdir:"))
+            .map(|s| s.trim())
+            .ok_or(HookError::InvalidGitFile)?;
+        project_dir.join(gitdir)
+    } else {
+        git_path
+    };
+
+    let hooks_dir = git_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join("prepare-commit-msg");
+    fs::write(&hook_path, generate_hook_script(agent))?;
+
+    // Make executable (Unix)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
+fn generate_hook_script(agent: AgentName) -> String {
+    let agent_flag = format!(" --agent {}", agent.as_str());
+    format!(r#"#!/bin/sh
+# Only run for regular commits (not merge, squash, etc.)
+if [ -z "$2" ]; then
+  echo "🤖 Generating commit message..." > /dev/tty 2>/dev/null || true
+  commitment{agent_flag} --message-only > "$1" || true
+fi
+"#)
 }
 ```
 
@@ -501,18 +637,31 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+# Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process"] }
+
+# CLI
 clap = { version = "4", features = ["derive"] }
+
+# Errors
 thiserror = "2"
 anyhow = "1"
+
+# Terminal
 console = "0.15"
 indicatif = "0.17"
+
+# Regex (for response cleaning + commit validation)
+regex = "1"
+once_cell = "1"   # For Lazy static regex
+
+# Serialization (hook manager config)
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
 
 [dev-dependencies]
-tokio-test = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 ```
 
 ## Implementation Order
