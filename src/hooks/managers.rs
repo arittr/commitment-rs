@@ -7,6 +7,16 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+/// Binary name for hook scripts
+///
+/// Must match the [[bin]] name in Cargo.toml
+const BINARY_NAME: &str = "commitment";
+
+/// Build the hook command string for a given agent
+fn hook_command(agent: &AgentName) -> String {
+    format!("{} --agent {} --message-only", BINARY_NAME, agent)
+}
+
 /// Install Lefthook hook
 ///
 /// Updates or creates lefthook.yml with prepare-commit-msg hook
@@ -57,10 +67,10 @@ pub fn install_lefthook(cwd: &Path, agent: &AgentName) -> Result<(), HookError> 
         r#"case "{{2}}" in
   *"{{"*)
     echo "🤖 Generating commit message..." > /dev/tty 2>/dev/null || true
-    commitment --agent {} --message-only > "{{1}}"
+    {} > "{{1}}"
     ;;
 esac"#,
-        agent
+        hook_command(agent)
     );
 
     let hook_entry = LefthookHook {
@@ -68,7 +78,7 @@ esac"#,
         commands: {
             let mut commands = HashMap::new();
             commands.insert(
-                "commitment".to_string(),
+                BINARY_NAME.to_string(),
                 LefthookCommand {
                     run: run_script,
                     interactive: Some(true),
@@ -112,9 +122,9 @@ pub fn install_husky(cwd: &Path, agent: &AgentName) -> Result<(), HookError> {
         r#"#!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
-commitment --agent {} --message-only
+{}
 "#,
-        agent
+        hook_command(agent)
     );
 
     fs::write(&hook_path, script).map_err(|_| HookError::ScriptCreationFailed {
@@ -153,7 +163,7 @@ pub fn install_simple_git_hooks(cwd: &Path, agent: &AgentName) -> Result<(), Hoo
         })?;
 
     // Add or update simple-git-hooks section
-    let hook_command = format!("commitment --agent {} --message-only", agent);
+    let cmd = hook_command(agent);
 
     if let Some(obj) = json.as_object_mut() {
         let hooks = obj
@@ -163,7 +173,7 @@ pub fn install_simple_git_hooks(cwd: &Path, agent: &AgentName) -> Result<(), Hoo
         if let Some(hooks_obj) = hooks.as_object_mut() {
             hooks_obj.insert(
                 "prepare-commit-msg".to_string(),
-                serde_json::Value::String(hook_command),
+                serde_json::Value::String(cmd),
             );
         }
     }
@@ -199,11 +209,12 @@ pub fn install_plain_git(cwd: &Path, agent: &AgentName) -> Result<(), HookError>
     // Create hook script
     let script = format!(
         r#"#!/usr/bin/env sh
-# commitment hook
+# {} hook
 
-commitment --agent {} --message-only
+{}
 "#,
-        agent
+        BINARY_NAME,
+        hook_command(agent)
     );
 
     fs::write(&hook_path, script).map_err(|_| HookError::ScriptCreationFailed {

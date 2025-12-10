@@ -1,4 +1,4 @@
-use crate::types::StagedDiff;
+use crate::types::{CONVENTIONAL_COMMIT_TYPES, StagedDiff};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -78,7 +78,10 @@ pub fn build_prompt(diff: &StagedDiff) -> String {
     prompt.push_str(
         "2. Clear, descriptive title (50 chars or less) following conventional commits\n",
     );
-    prompt.push_str("   - Start with type: feat, fix, docs, style, refactor, test, chore, perf, build, ci, or revert\n");
+    prompt.push_str(&format!(
+        "   - Start with type: {}\n",
+        CONVENTIONAL_COMMIT_TYPES.join(", ")
+    ));
     prompt.push_str("   - Optional scope in parentheses: type(scope): description\n");
     prompt.push_str("3. Be CONCISE - match detail level to scope of changes:\n");
     prompt.push_str("   - Single file/method: 2-4 bullet points max\n");
