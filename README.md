@@ -11,11 +11,17 @@ A Rust port of [commitment](https://github.com/arittr/commitment) - generates co
 Currently under development. See CLAUDE.md for architecture and development guidelines.
 
 
-## Features (Planned)
+## Features
 
 - Generate conventional commit messages from staged changes
 - Support for Claude, Codex, and Gemini AI agents
+- Optimized git diff processing:
+  - Automatic truncation of large diffs (8000 char limit) to prevent token overflow
+  - Compact unified diffs (--unified=3) for efficient AI analysis
+  - Whitespace-change filtering (--ignore-space-change) for cleaner diffs
+  - Change summaries (file count, lines added/removed) in prompts
 - Git hook integration (lefthook, husky, simple-git-hooks, plain git hooks)
+  - Lefthook safety verification to prevent accidental signature bypasses
 - Git worktree support
 - Fast startup, single binary distribution
 
