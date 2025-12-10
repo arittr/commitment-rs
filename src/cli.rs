@@ -2,7 +2,7 @@ use crate::agents::Agent;
 use crate::error::{AgentError, GeneratorError, GitError};
 use crate::git::{GitProvider, RealGitProvider};
 use crate::hooks::{HookManager, detect_hook_manager, install_hook};
-use crate::types::AgentName;
+use crate::types::{AgentName, commit_types_display};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use console::style;
@@ -349,9 +349,7 @@ fn format_error(error: &GeneratorError, args: &GenerateArgs) {
             eprintln!("  The AI generated an invalid commit message.");
             eprintln!("  Expected format: <type>(<scope>): <description>");
             eprintln!();
-            eprintln!(
-                "  Valid types: feat, fix, docs, style, refactor, test, chore, perf, build, ci, revert"
-            );
+            eprintln!("  Valid types: {}", commit_types_display());
             if args.verbose {
                 eprintln!();
                 eprintln!("  This is unusual - the AI should generate valid messages.");

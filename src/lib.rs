@@ -3,7 +3,9 @@ pub use agents::{Agent, clean_ai_response};
 pub use error::{AgentError, GeneratorError, GitError};
 pub use git::GitProvider;
 pub use prompt::build_prompt;
-pub use types::{AgentName, ConventionalCommit, StagedDiff};
+pub use types::{
+    AgentName, CONVENTIONAL_COMMIT_TYPES, ConventionalCommit, StagedDiff, commit_types_display,
+};
 
 // Internal modules
 pub mod agents;

@@ -3,11 +3,22 @@ use regex::Regex;
 use std::fmt;
 use std::str::FromStr;
 
+/// Valid conventional commit types
+///
+/// These are the only allowed prefixes for commit messages.
+/// Used to build the validation regex and display in error messages.
+pub const CONVENTIONAL_COMMIT_TYPES: &[&str] = &[
+    "feat", "fix", "docs", "style", "refactor", "test", "chore", "perf", "build", "ci", "revert",
+];
+
+/// Format commit types as a comma-separated list for display
+pub fn commit_types_display() -> String {
+    CONVENTIONAL_COMMIT_TYPES.join(", ")
+}
+
 static CONVENTIONAL_COMMIT_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"^(feat|fix|docs|style|refactor|test|chore|perf|build|ci|revert)(\([a-z0-9\-]+\))?: .+",
-    )
-    .expect("valid regex pattern")
+    let types = CONVENTIONAL_COMMIT_TYPES.join("|");
+    Regex::new(&format!(r"^({})(\([a-z0-9\-]+\))?: .+", types)).expect("valid regex pattern")
 });
 
 /// Agent names - closed set of supported AI CLIs
