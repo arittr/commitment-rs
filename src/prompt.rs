@@ -1,12 +1,70 @@
 use crate::types::StagedDiff;
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+/// Maximum length for diff content before truncation
+const MAX_DIFF_LENGTH: usize = 8000;
+
+/// Truncate diff content to prevent token limit issues
+///
+/// If diff exceeds MAX_DIFF_LENGTH, truncates at a character boundary
+/// and appends a truncation indicator.
+fn truncate_diff(diff: &str) -> String {
+    if diff.len() <= MAX_DIFF_LENGTH {
+        return diff.to_string();
+    }
+
+    // Find character boundary to avoid panicking on UTF-8
+    let mut boundary = MAX_DIFF_LENGTH;
+    while boundary > 0 && !diff.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+
+    format!("{}\n... (diff truncated)", &diff[..boundary])
+}
+
+/// Parse change summary from git stat and name-status output
+///
+/// Extracts:
+/// - File count from name_status (line count)
+/// - Lines added/removed from stat output
+fn parse_change_summary(stat: &str, name_status: &str) -> String {
+    // Count files from name_status (each line is a file)
+    let file_count = name_status.lines().filter(|line| !line.is_empty()).count();
+
+    // Regex to extract insertions and deletions from stat
+    // Example: "1 file changed, 10 insertions(+), 5 deletions(-)"
+    static INSERTIONS_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(\d+) insertion[s]?\(\+\)").unwrap());
+    static DELETIONS_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(\d+) deletion[s]?\(-\)").unwrap());
+
+    let lines_added = INSERTIONS_RE
+        .captures(stat)
+        .and_then(|cap| cap.get(1))
+        .and_then(|m| m.as_str().parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let lines_removed = DELETIONS_RE
+        .captures(stat)
+        .and_then(|cap| cap.get(1))
+        .and_then(|m| m.as_str().parse::<usize>().ok())
+        .unwrap_or(0);
+
+    format!(
+        "Files changed: {}\nLines added: {}\nLines removed: {}",
+        file_count, lines_added, lines_removed
+    )
+}
 
 /// Build AI prompt from staged git diff
 ///
 /// Creates a template with:
 /// - Instructions for conventional commit format
+/// - Change summary (file count, lines added/removed)
 /// - File statistics (--stat)
 /// - File name/status (--name-status)
-/// - Full diff content
+/// - Full diff content (truncated if over 8000 chars)
 /// - Marker tags for response extraction
 ///
 /// No diff analysis - AI handles pattern detection
@@ -48,6 +106,11 @@ pub fn build_prompt(diff: &StagedDiff) -> String {
     prompt.push_str("(commit message goes here)\n");
     prompt.push_str("<<<COMMIT_MESSAGE_END>>>\n\n");
 
+    // Change summary section
+    prompt.push_str("=== CHANGE SUMMARY ===\n");
+    prompt.push_str(&parse_change_summary(&diff.stat, &diff.name_status));
+    prompt.push_str("\n\n");
+
     // File statistics section
     prompt.push_str("=== FILE STATISTICS ===\n");
     if diff.stat.is_empty() {
@@ -68,12 +131,13 @@ pub fn build_prompt(diff: &StagedDiff) -> String {
     }
     prompt.push('\n');
 
-    // Full diff section
+    // Full diff section (with truncation)
     prompt.push_str("=== FULL DIFF ===\n");
     if diff.diff.is_empty() {
         prompt.push_str("(no changes)\n");
     } else {
-        prompt.push_str(&diff.diff);
+        let truncated = truncate_diff(&diff.diff);
+        prompt.push_str(&truncated);
         prompt.push('\n');
     }
 
@@ -232,5 +296,190 @@ mod tests {
 
         // Should not have excessive trailing whitespace
         assert!(!prompt.ends_with("\n\n\n"));
+    }
+
+    // Truncation tests
+    #[test]
+    fn truncate_diff_within_limit() {
+        let short_diff = "a".repeat(7999);
+        let result = truncate_diff(&short_diff);
+        assert_eq!(result, short_diff);
+        assert!(!result.contains("truncated"));
+    }
+
+    #[test]
+    fn truncate_diff_at_exact_limit() {
+        let exact_diff = "a".repeat(8000);
+        let result = truncate_diff(&exact_diff);
+        assert_eq!(result, exact_diff);
+        assert!(!result.contains("truncated"));
+    }
+
+    #[test]
+    fn truncate_diff_over_limit() {
+        let long_diff = "a".repeat(8001);
+        let result = truncate_diff(&long_diff);
+        // Result should be truncated original + message
+        assert!(result.contains("... (diff truncated)"));
+        assert!(result.starts_with("aaa"));
+        // Verify the diff portion is truncated to 8000 or less
+        let diff_portion = result.trim_end_matches("\n... (diff truncated)");
+        assert!(diff_portion.len() <= MAX_DIFF_LENGTH);
+    }
+
+    #[test]
+    fn truncate_diff_message_appended() {
+        let long_diff = "x".repeat(10000);
+        let result = truncate_diff(&long_diff);
+        assert!(result.ends_with("... (diff truncated)"));
+    }
+
+    #[test]
+    fn truncate_diff_respects_utf8_boundaries() {
+        // Create a string with multibyte UTF-8 character near boundary
+        let mut diff = "a".repeat(7998);
+        diff.push('🦀'); // 4-byte UTF-8 char
+        diff.push_str(&"b".repeat(100));
+
+        let result = truncate_diff(&diff);
+        // Should not panic and should be valid UTF-8
+        assert!(result.len() <= 8000 + "... (diff truncated)".len() + 10);
+    }
+
+    // Change summary tests
+    #[test]
+    fn parse_change_summary_with_insertions_and_deletions() {
+        let stat = "2 files changed, 10 insertions(+), 5 deletions(-)";
+        let name_status = "M\tsrc/file1.rs\nA\tsrc/file2.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(
+            result,
+            "Files changed: 2\nLines added: 10\nLines removed: 5"
+        );
+    }
+
+    #[test]
+    fn parse_change_summary_only_insertions() {
+        let stat = "1 file changed, 15 insertions(+)";
+        let name_status = "A\tsrc/new.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(
+            result,
+            "Files changed: 1\nLines added: 15\nLines removed: 0"
+        );
+    }
+
+    #[test]
+    fn parse_change_summary_only_deletions() {
+        let stat = "1 file changed, 8 deletions(-)";
+        let name_status = "D\tsrc/old.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(result, "Files changed: 1\nLines added: 0\nLines removed: 8");
+    }
+
+    #[test]
+    fn parse_change_summary_singular_insertion() {
+        let stat = "1 file changed, 1 insertion(+)";
+        let name_status = "M\tsrc/file.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(result, "Files changed: 1\nLines added: 1\nLines removed: 0");
+    }
+
+    #[test]
+    fn parse_change_summary_singular_deletion() {
+        let stat = "1 file changed, 1 deletion(-)";
+        let name_status = "M\tsrc/file.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(result, "Files changed: 1\nLines added: 0\nLines removed: 1");
+    }
+
+    #[test]
+    fn parse_change_summary_multiple_files() {
+        let stat = "5 files changed, 100 insertions(+), 50 deletions(-)";
+        let name_status = "M\tsrc/a.rs\nM\tsrc/b.rs\nA\tsrc/c.rs\nD\tsrc/d.rs\nM\tsrc/e.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(
+            result,
+            "Files changed: 5\nLines added: 100\nLines removed: 50"
+        );
+    }
+
+    #[test]
+    fn parse_change_summary_empty_stat() {
+        let stat = "";
+        let name_status = "M\tsrc/file.rs";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(result, "Files changed: 1\nLines added: 0\nLines removed: 0");
+    }
+
+    #[test]
+    fn parse_change_summary_empty_name_status() {
+        let stat = "1 file changed, 5 insertions(+)";
+        let name_status = "";
+        let result = parse_change_summary(stat, name_status);
+
+        assert_eq!(result, "Files changed: 0\nLines added: 5\nLines removed: 0");
+    }
+
+    #[test]
+    fn parse_change_summary_handles_whitespace_lines() {
+        let stat = "2 files changed, 10 insertions(+), 5 deletions(-)";
+        let name_status = "M\tsrc/a.rs\n\nM\tsrc/b.rs\n";
+        let result = parse_change_summary(stat, name_status);
+
+        // Should ignore empty lines
+        assert_eq!(
+            result,
+            "Files changed: 2\nLines added: 10\nLines removed: 5"
+        );
+    }
+
+    #[test]
+    fn prompt_includes_change_summary_section() {
+        let diff = StagedDiff {
+            stat: "2 files changed, 10 insertions(+), 5 deletions(-)".to_string(),
+            name_status: "M\tsrc/a.rs\nA\tsrc/b.rs".to_string(),
+            diff: "test diff".to_string(),
+        };
+        let prompt = build_prompt(&diff);
+
+        assert!(prompt.contains("=== CHANGE SUMMARY ==="));
+        assert!(prompt.contains("Files changed: 2"));
+        assert!(prompt.contains("Lines added: 10"));
+        assert!(prompt.contains("Lines removed: 5"));
+    }
+
+    #[test]
+    fn prompt_change_summary_before_file_stats() {
+        let diff = StagedDiff {
+            stat: "1 file changed, 5 insertions(+)".to_string(),
+            name_status: "M\tsrc/test.rs".to_string(),
+            diff: "diff".to_string(),
+        };
+        let prompt = build_prompt(&diff);
+
+        let summary_pos = prompt.find("=== CHANGE SUMMARY ===").unwrap();
+        let stats_pos = prompt.find("=== FILE STATISTICS ===").unwrap();
+
+        assert!(summary_pos < stats_pos);
+    }
+
+    #[test]
+    fn prompt_truncates_large_diff() {
+        let diff = StagedDiff {
+            stat: "1 file changed, 1 insertion(+)".to_string(),
+            name_status: "M\tsrc/test.rs".to_string(),
+            diff: "x".repeat(10000),
+        };
+        let prompt = build_prompt(&diff);
+
+        assert!(prompt.contains("... (diff truncated)"));
     }
 }
