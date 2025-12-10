@@ -6,6 +6,9 @@ use crate::error::AgentError;
 use crate::types::AgentName;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 // Regex patterns for response cleaning (compiled once with Lazy)
 static MARKER_EXTRACT: Lazy<Regex> = Lazy::new(|| {
@@ -26,6 +29,94 @@ static THINKING_TAGS: Lazy<Regex> =
 
 static MULTIPLE_NEWLINES: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\n{3,}").expect("valid regex pattern"));
+
+/// Shared timeout for all agents (120 seconds)
+#[allow(dead_code)] // Used in later phases
+pub(crate) const AGENT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Check if a CLI command exists in PATH
+///
+/// Uses `which` to check for command availability.
+/// Returns NotFound error with the specified agent name if command doesn't exist.
+#[allow(dead_code)] // Used in later phases
+pub(crate) async fn check_command_exists(
+    command: &str,
+    agent: AgentName,
+) -> Result<(), AgentError> {
+    let result = Command::new("which").arg(command).output().await;
+
+    match result {
+        Ok(output) if output.status.success() => Ok(()),
+        _ => Err(AgentError::NotFound { agent }),
+    }
+}
+
+/// Run a command with prompt via stdin
+///
+/// Spawns a process with the given command and arguments, writes the prompt
+/// to stdin, and captures stdout. Used by Claude and Codex agents.
+///
+/// # Arguments
+/// * `command` - The command to execute (e.g., "claude", "codex")
+/// * `args` - Command-line arguments for the command
+/// * `prompt` - The prompt text to write to stdin
+/// * `agent` - The agent name for error reporting
+///
+/// # Returns
+/// The stdout output from the command if successful
+#[allow(dead_code)] // Used in later phases
+pub(crate) async fn run_command_with_stdin(
+    command: &str,
+    args: &[&str],
+    prompt: &str,
+    agent: AgentName,
+) -> Result<String, AgentError> {
+    let mut child = Command::new(command)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| AgentError::ExecutionFailed {
+            agent,
+            stderr: e.to_string(),
+        })?;
+
+    // Write prompt to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| AgentError::ExecutionFailed {
+                agent,
+                stderr: format!("failed to write to stdin: {}", e),
+            })?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| AgentError::ExecutionFailed {
+                agent,
+                stderr: format!("failed to flush stdin: {}", e),
+            })?;
+    }
+
+    // Wait for process to complete
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| AgentError::ExecutionFailed {
+            agent,
+            stderr: e.to_string(),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(AgentError::ExecutionFailed { agent, stderr });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(stdout)
+}
 
 /// Agent enum - closed set of supported AI agents
 ///
@@ -290,5 +381,78 @@ This implements JWT-based authentication.
     fn agent_from_agent_name_gemini() {
         let agent = Agent::from(AgentName::Gemini);
         assert_eq!(agent.name(), AgentName::Gemini);
+    }
+
+    #[test]
+    fn agent_timeout_constant() {
+        // Verify timeout is 120 seconds as specified
+        assert_eq!(AGENT_TIMEOUT.as_secs(), 120);
+    }
+
+    #[tokio::test]
+    async fn check_command_exists_with_existing_command() {
+        // Test with a command that definitely exists
+        let result = check_command_exists("echo", AgentName::Claude).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn check_command_exists_with_nonexistent_command() {
+        // Test with a command that definitely doesn't exist
+        let result = check_command_exists(
+            "this-command-definitely-does-not-exist-99999",
+            AgentName::Codex,
+        )
+        .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AgentError::NotFound { agent } => assert_eq!(agent, AgentName::Codex),
+            _ => panic!("expected NotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_command_with_stdin_success() {
+        // Test with echo command which will succeed
+        let result = run_command_with_stdin("cat", &[], "test input", AgentName::Claude).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test input");
+    }
+
+    #[tokio::test]
+    async fn run_command_with_stdin_command_not_found() {
+        // Test with nonexistent command
+        let result = run_command_with_stdin(
+            "this-command-does-not-exist-12345",
+            &[],
+            "test",
+            AgentName::Gemini,
+        )
+        .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AgentError::ExecutionFailed { agent, .. } => assert_eq!(agent, AgentName::Gemini),
+            _ => panic!("expected ExecutionFailed error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_command_with_stdin_command_failure() {
+        // Test with command that exits with error (ls on nonexistent directory)
+        let result = run_command_with_stdin(
+            "ls",
+            &["/this/path/does/not/exist/surely"],
+            "",
+            AgentName::Claude,
+        )
+        .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AgentError::ExecutionFailed { agent, stderr } => {
+                assert_eq!(agent, AgentName::Claude);
+                assert!(!stderr.is_empty());
+            }
+            _ => panic!("expected ExecutionFailed error"),
+        }
     }
 }
