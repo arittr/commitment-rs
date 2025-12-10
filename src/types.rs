@@ -119,6 +119,7 @@ impl ConventionalCommit {
     /// - type: feat, fix, docs, style, refactor, test, chore, perf, build, ci, revert
     /// - scope: optional, e.g., (api), (cli)
     /// - description: required
+    #[must_use = "validation result should be checked"]
     pub fn validate(msg: &str) -> Result<Self, CommitValidationError> {
         let msg = msg.trim();
 
@@ -140,6 +141,34 @@ impl ConventionalCommit {
 
     /// Get the commit message as a string slice
     pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+/// Enables `&commit` to be used where `&str` is expected
+///
+/// Example: `fn process(s: impl AsRef<str>)` accepts `&commit`
+impl AsRef<str> for ConventionalCommit {
+    fn as_ref(&self) -> &str {
+        &self.raw
+    }
+}
+
+/// Enables transparent string access: `*commit` yields `&str`
+///
+/// This allows direct string operations without explicit conversion:
+/// - `commit.len()` works directly
+/// - `commit.contains("feat")` works directly
+///
+/// Note: Some prefer explicit `.as_str()` calls for clarity. We provide both:
+/// - `Deref` for ergonomics
+/// - `.as_str()` for explicitness
+///
+/// The private `raw` field still enforces validation-on-construction.
+impl std::ops::Deref for ConventionalCommit {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         &self.raw
     }
 }
@@ -423,5 +452,54 @@ mod tests {
             assert!(url.starts_with("https://"));
             assert!(!url.is_empty());
         }
+    }
+
+    #[test]
+    fn conventional_commit_deref_works() {
+        // Test that Deref allows direct string operations
+        let commit = ConventionalCommit::validate("feat: add feature").unwrap();
+
+        // These work because of Deref<Target=str>
+        assert_eq!(commit.len(), 17);
+        assert!(commit.contains("feat"));
+        assert!(commit.starts_with("feat:"));
+        assert_eq!(&commit[0..4], "feat");
+    }
+
+    #[test]
+    fn conventional_commit_as_ref_works() {
+        // Test that AsRef<str> allows passing to generic functions
+        let commit = ConventionalCommit::validate("fix: resolve bug").unwrap();
+
+        // Helper function that accepts AsRef<str>
+        fn process_string(s: impl AsRef<str>) -> usize {
+            s.as_ref().len()
+        }
+
+        // Should work with &commit
+        assert_eq!(process_string(&commit), 16);
+        assert_eq!(process_string(commit.as_ref()), 16);
+    }
+
+    #[test]
+    fn conventional_commit_trait_implementations() {
+        // Verify all three ways to access the string work
+        let commit = ConventionalCommit::validate("chore: update deps").unwrap();
+
+        // as_str() - explicit method
+        let s1: &str = commit.as_str();
+        assert_eq!(s1, "chore: update deps");
+
+        // as_ref() - AsRef trait
+        let s2: &str = commit.as_ref();
+        assert_eq!(s2, "chore: update deps");
+
+        // deref - Deref trait (implicit via &*)
+        let s3: &str = &*commit;
+        assert_eq!(s3, "chore: update deps");
+
+        // All should be equal
+        assert_eq!(s1, s2);
+        assert_eq!(s2, s3);
     }
 }
