@@ -35,13 +35,29 @@ pub fn install_lefthook(cwd: &Path, agent: &AgentName) -> Result<(), HookError> 
     };
 
     // Add prepare-commit-msg hook
+    // Uses lefthook placeholders:
+    //   {1} = commit message file path
+    //   {2} = commit source ("message", "template", "merge", "squash", "commit", or unsubstituted)
+    // Only run for regular commits (when {2} is unsubstituted, contains literal braces)
+    let run_script = format!(
+        r#"case "{{2}}" in
+  *"{{"*)
+    echo "🤖 Generating commit message..." > /dev/tty 2>/dev/null || true
+    commitment --agent {} --message-only > "{{1}}"
+    ;;
+esac"#,
+        agent
+    );
+
     let hook_entry = LefthookHook {
+        skip: Some(vec!["merge".to_string(), "rebase".to_string()]),
         commands: {
             let mut commands = HashMap::new();
             commands.insert(
                 "commitment".to_string(),
                 LefthookCommand {
-                    run: format!("commitment --agent {} --message-only", agent),
+                    run: run_script,
+                    interactive: Some(true),
                 },
             );
             commands
@@ -234,12 +250,16 @@ struct LefthookConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LefthookHook {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip: Option<Vec<String>>,
     commands: HashMap<String, LefthookCommand>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LefthookCommand {
     run: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interactive: Option<bool>,
 }
 
 #[cfg(test)]
@@ -260,6 +280,15 @@ mod tests {
         assert!(content.contains("prepare-commit-msg"));
         assert!(content.contains("commitment"));
         assert!(content.contains("--agent claude"));
+        // Verify skip conditions
+        assert!(content.contains("skip"));
+        assert!(content.contains("merge"));
+        assert!(content.contains("rebase"));
+        // Verify interactive flag
+        assert!(content.contains("interactive: true"));
+        // Verify placeholders for commit message file
+        assert!(content.contains("{1}"));
+        assert!(content.contains("{2}"));
     }
 
     #[test]

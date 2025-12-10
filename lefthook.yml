@@ -1,0 +1,25 @@
+# This config allows commitment to dogfood itself
+pre-commit:
+  parallel: false
+  commands:
+    lint:
+      run: just lint
+    test:
+      run: just test
+    build:
+      run: just build
+
+prepare-commit-msg:
+  skip:
+  - merge
+  - rebase
+  commands:
+    commitment:
+      run: |
+        case "{2}" in
+          *"{"*)
+            echo "🤖 Generating commit message..." > /dev/tty 2>/dev/null || true
+            ./target/debug/commitment --agent claude --message-only > "{1}"
+            ;;
+        esac
+      interactive: true
