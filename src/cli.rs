@@ -114,6 +114,16 @@ pub async fn run_generate(args: GenerateArgs) -> Result<()> {
     // Create agent
     let agent = Agent::from(agent_name);
 
+    // Generate default signature based on agent
+    let signature = format!(
+        "🤖 Generated with {} via commitment",
+        match agent_name {
+            AgentName::Claude => "Claude",
+            AgentName::Codex => "Codex",
+            AgentName::Gemini => "Gemini",
+        }
+    );
+
     // Show spinner unless quiet or message-only mode
     let spinner = if !args.quiet && !args.message_only {
         let pb = ProgressBar::new_spinner();
@@ -131,7 +141,7 @@ pub async fn run_generate(args: GenerateArgs) -> Result<()> {
     };
 
     // Generate commit message
-    let result = crate::generate_commit_message(&git, &agent, None).await;
+    let result = crate::generate_commit_message(&git, &agent, Some(&signature)).await;
 
     // Stop spinner
     if let Some(pb) = spinner {
