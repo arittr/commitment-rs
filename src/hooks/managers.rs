@@ -1,4 +1,5 @@
 use crate::error::HookError;
+use crate::git::resolve_git_dir;
 use crate::types::AgentName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -172,7 +173,7 @@ pub fn install_simple_git_hooks(cwd: &Path, agent: &AgentName) -> Result<(), Hoo
 /// Creates .git/hooks/prepare-commit-msg script
 /// Handles git worktrees by resolving .git file's gitdir reference
 pub fn install_plain_git(cwd: &Path, agent: &AgentName) -> Result<(), HookError> {
-    let git_dir = resolve_git_dir(cwd)?;
+    let git_dir = resolve_git_dir(cwd).map_err(|_| HookError::GitDirResolutionFailed)?;
     let hooks_dir = git_dir.join("hooks");
 
     // Create hooks directory if it doesn't exist
@@ -206,39 +207,6 @@ commitment --agent {} --message-only
     })?;
 
     Ok(())
-}
-
-/// Resolve git directory, handling worktrees
-///
-/// If .git is a directory, return it
-/// If .git is a file (worktree), parse gitdir reference and return that
-fn resolve_git_dir(cwd: &Path) -> Result<std::path::PathBuf, HookError> {
-    let git_path = cwd.join(".git");
-
-    if !git_path.exists() {
-        return Err(HookError::GitDirResolutionFailed);
-    }
-
-    // Check if it's a directory (normal repo)
-    if git_path.is_dir() {
-        return Ok(git_path);
-    }
-
-    // It's a file (worktree) - read gitdir reference
-    let content = fs::read_to_string(&git_path).map_err(HookError::Io)?;
-
-    for line in content.lines() {
-        if let Some(gitdir) = line.strip_prefix("gitdir: ") {
-            let resolved = if std::path::Path::new(gitdir).is_absolute() {
-                std::path::PathBuf::from(gitdir)
-            } else {
-                cwd.join(gitdir)
-            };
-            return Ok(resolved);
-        }
-    }
-
-    Err(HookError::GitDirResolutionFailed)
 }
 
 // Lefthook config structures
@@ -379,7 +347,8 @@ pre-commit:
     }
 
     #[test]
-    fn resolve_git_dir_handles_directory() {
+    fn shared_resolve_git_dir_works_from_hooks() {
+        // Test that we can use the shared git::resolve_git_dir from hooks module
         let dir = TempDir::new().unwrap();
         let git_dir = dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
@@ -389,7 +358,7 @@ pre-commit:
     }
 
     #[test]
-    fn resolve_git_dir_handles_worktree_file() {
+    fn shared_resolve_git_dir_handles_worktree() {
         let dir = TempDir::new().unwrap();
         let git_file = dir.path().join(".git");
         let actual_git_dir = dir.path().join("../.git/worktrees/test");
@@ -401,7 +370,7 @@ pre-commit:
     }
 
     #[test]
-    fn resolve_git_dir_handles_absolute_path() {
+    fn shared_resolve_git_dir_handles_absolute_path() {
         let dir = TempDir::new().unwrap();
         let git_file = dir.path().join(".git");
         let actual_git_dir = TempDir::new().unwrap();
@@ -417,9 +386,10 @@ pre-commit:
     }
 
     #[test]
-    fn resolve_git_dir_fails_without_git_dir() {
+    fn install_plain_git_fails_without_git_dir() {
+        // Test that error mapping from GitError to HookError works
         let dir = TempDir::new().unwrap();
-        let result = resolve_git_dir(dir.path());
+        let result = install_plain_git(dir.path(), &AgentName::Claude);
         assert!(matches!(result, Err(HookError::GitDirResolutionFailed)));
     }
 }

@@ -3,6 +3,42 @@ use crate::types::StagedDiff;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Resolve git directory path, handling worktrees
+///
+/// Shared utility function used by both git operations and hook installation.
+/// In a worktree, .git is a file containing: gitdir: <path>
+/// In a regular repo, .git is a directory
+///
+/// # Errors
+///
+/// Returns `GitError::WorktreeResolution` if .git is missing or malformed
+pub fn resolve_git_dir(cwd: &Path) -> Result<PathBuf, GitError> {
+    let git_path = cwd.join(".git");
+
+    if git_path.is_dir() {
+        return Ok(git_path);
+    }
+
+    if git_path.is_file() {
+        let content = std::fs::read_to_string(&git_path)?;
+        // Format: "gitdir: /path/to/worktree\n"
+        if let Some(gitdir_line) = content.lines().next()
+            && let Some(path) = gitdir_line.strip_prefix("gitdir: ")
+        {
+            let resolved = if Path::new(path).is_absolute() {
+                PathBuf::from(path)
+            } else {
+                cwd.join(path)
+            };
+            return Ok(resolved);
+        }
+    }
+
+    Err(GitError::WorktreeResolution {
+        path: git_path.display().to_string(),
+    })
+}
+
 /// Git operations abstraction
 ///
 /// Trait enables dependency injection for testing without mock libraries.
@@ -47,31 +83,8 @@ impl RealGitProvider {
     /// In a worktree, .git is a file containing: gitdir: <path>
     /// In a regular repo, .git is a directory
     #[allow(dead_code)] // Used by hook installation in later phases
-    fn resolve_git_dir(&self) -> Result<PathBuf, GitError> {
-        let git_path = self.cwd.join(".git");
-
-        if git_path.is_dir() {
-            return Ok(git_path);
-        }
-
-        if git_path.is_file() {
-            let content = std::fs::read_to_string(&git_path)?;
-            // Format: "gitdir: /path/to/worktree\n"
-            if let Some(gitdir_line) = content.lines().next()
-                && let Some(path) = gitdir_line.strip_prefix("gitdir: ")
-            {
-                let resolved = if Path::new(path).is_absolute() {
-                    PathBuf::from(path)
-                } else {
-                    self.cwd.join(path)
-                };
-                return Ok(resolved);
-            }
-        }
-
-        Err(GitError::WorktreeResolution {
-            path: git_path.display().to_string(),
-        })
+    pub fn resolve_git_dir_method(&self) -> Result<PathBuf, GitError> {
+        resolve_git_dir(&self.cwd)
     }
 }
 
@@ -85,7 +98,9 @@ impl GitProvider for RealGitProvider {
         // Get the three components of the diff
         let stat = self.run_git(&["diff", "--cached", "--stat"])?;
         let name_status = self.run_git(&["diff", "--cached", "--name-status"])?;
-        let diff = self.run_git(&["diff", "--cached"])?;
+        // Use --unified=3 for compact context and --ignore-space-change to filter whitespace noise
+        // This reduces token count and produces cleaner diffs for AI analysis
+        let diff = self.run_git(&["diff", "--cached", "--unified=3", "--ignore-space-change"])?;
 
         Ok(StagedDiff {
             stat,
@@ -243,8 +258,7 @@ mod tests {
         let mut file = std::fs::File::create(&git_file).unwrap();
         writeln!(file, "gitdir: /path/to/worktree/.git/worktrees/test").unwrap();
 
-        let provider = RealGitProvider::new(temp_dir.path().to_path_buf());
-        let result = provider.resolve_git_dir();
+        let result = resolve_git_dir(temp_dir.path());
 
         assert!(result.is_ok());
         let git_dir = result.unwrap();
@@ -264,8 +278,7 @@ mod tests {
         let mut file = std::fs::File::create(&git_file).unwrap();
         writeln!(file, "gitdir: ../main/.git/worktrees/test").unwrap();
 
-        let provider = RealGitProvider::new(temp_dir.path().to_path_buf());
-        let result = provider.resolve_git_dir();
+        let result = resolve_git_dir(temp_dir.path());
 
         assert!(result.is_ok());
         // Should resolve relative to cwd
@@ -278,8 +291,7 @@ mod tests {
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        let provider = RealGitProvider::new(temp_dir.path().to_path_buf());
-        let result = provider.resolve_git_dir();
+        let result = resolve_git_dir(temp_dir.path());
 
         assert!(matches!(result, Err(GitError::WorktreeResolution { .. })));
     }
