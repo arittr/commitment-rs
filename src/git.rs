@@ -98,8 +98,16 @@ impl GitProvider for RealGitProvider {
         // Get the three components of the diff
         let stat = self.run_git(&["diff", "--cached", "--stat"])?;
         let name_status = self.run_git(&["diff", "--cached", "--name-status"])?;
-        // Use --unified=3 for compact context and --ignore-space-change to filter whitespace noise
-        // This reduces token count and produces cleaner diffs for AI analysis
+
+        // Git diff flags are optimized for AI analysis:
+        // - `--unified=3`: Provides compact context (3 lines instead of default)
+        // - `--ignore-space-change`: Filters whitespace noise for cleaner diffs
+        // This reduces token count while maintaining semantic clarity.
+        //
+        // Testing note: Command flag verification requires integration tests with a real git
+        // repository (Phase 3 Task 3.2). Unit testing would require mocking Command execution,
+        // which doesn't verify actual git behavior. Manual testing confirms these flags work
+        // correctly and produce the expected compact, clean diffs.
         let diff = self.run_git(&["diff", "--cached", "--unified=3", "--ignore-space-change"])?;
 
         Ok(StagedDiff {
