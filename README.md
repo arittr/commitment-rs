@@ -2,13 +2,14 @@
 
 > AI-powered commit message generator using your local CLI tools - no API keys required
 
-<img width="500" height="304" alt="rust-bart" src="https://github.com/user-attachments/assets/78132637-ffb6-42e4-ab8d-4017be943722" />
+<img width="500" height="378" alt="rust-bart" src="https://github.com/user-attachments/assets/92761655-310f-44fb-85ef-aecf67910dd3" />
 
 A Rust port of [commitment](https://github.com/arittr/commitment) - generates conventional commit messages from git diffs using Claude, Codex, or Gemini CLI tools.
 
 ## Status
 
 Currently under development. See CLAUDE.md for architecture and development guidelines.
+
 
 ## Features (Planned)
 
