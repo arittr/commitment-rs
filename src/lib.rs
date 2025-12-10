@@ -1,5 +1,5 @@
 // Public API exports
-pub use agents::{Agent, clean_ai_response};
+pub use agents::{Agent, AgentExecutor, clean_ai_response};
 pub use error::{AgentError, GeneratorError, GitError};
 pub use git::GitProvider;
 pub use prompt::build_prompt;
@@ -60,7 +60,7 @@ pub mod types;
 /// ```
 pub async fn generate_commit_message(
     git: &impl GitProvider,
-    agent: &Agent,
+    agent: &impl AgentExecutor,
     signature: Option<&str>,
 ) -> Result<ConventionalCommit, GeneratorError> {
     // Step 1: Check for staged changes
