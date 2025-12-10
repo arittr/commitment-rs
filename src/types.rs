@@ -18,6 +18,48 @@ pub enum AgentName {
     Gemini,
 }
 
+impl AgentName {
+    /// Get human-readable display name for the agent
+    ///
+    /// Returns the capitalized name suitable for display in commit signatures
+    /// and user-facing messages.
+    ///
+    /// # Examples
+    /// ```
+    /// # use commitment_rs::types::AgentName;
+    /// assert_eq!(AgentName::Claude.display_name(), "Claude");
+    /// assert_eq!(AgentName::Codex.display_name(), "Codex");
+    /// assert_eq!(AgentName::Gemini.display_name(), "Gemini");
+    /// ```
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Gemini => "Gemini",
+        }
+    }
+
+    /// Get installation URL for the agent
+    ///
+    /// Returns the official installation documentation URL for the agent,
+    /// useful for error messages when the agent is not found.
+    ///
+    /// # Examples
+    /// ```
+    /// # use commitment_rs::types::AgentName;
+    /// assert!(AgentName::Claude.install_url().contains("anthropic.com"));
+    /// assert!(AgentName::Codex.install_url().contains("github.com"));
+    /// assert!(AgentName::Gemini.install_url().contains("github.com"));
+    /// ```
+    pub fn install_url(&self) -> &'static str {
+        match self {
+            Self::Claude => "https://docs.anthropic.com/en/docs/claude-cli",
+            Self::Codex => "https://github.com/phughk/codex",
+            Self::Gemini => "https://github.com/google/generative-ai-cli",
+        }
+    }
+}
+
 impl FromStr for AgentName {
     type Err = AgentNameParseError;
 
@@ -325,5 +367,61 @@ mod tests {
         };
         let diff2 = diff1.clone();
         assert_eq!(diff1, diff2);
+    }
+
+    #[test]
+    fn agent_name_display_name_claude() {
+        assert_eq!(AgentName::Claude.display_name(), "Claude");
+    }
+
+    #[test]
+    fn agent_name_display_name_codex() {
+        assert_eq!(AgentName::Codex.display_name(), "Codex");
+    }
+
+    #[test]
+    fn agent_name_display_name_gemini() {
+        assert_eq!(AgentName::Gemini.display_name(), "Gemini");
+    }
+
+    #[test]
+    fn agent_name_install_url_claude() {
+        let url = AgentName::Claude.install_url();
+        assert_eq!(url, "https://docs.anthropic.com/en/docs/claude-cli");
+        assert!(url.contains("anthropic.com"));
+    }
+
+    #[test]
+    fn agent_name_install_url_codex() {
+        let url = AgentName::Codex.install_url();
+        assert_eq!(url, "https://github.com/phughk/codex");
+        assert!(url.contains("github.com"));
+    }
+
+    #[test]
+    fn agent_name_install_url_gemini() {
+        let url = AgentName::Gemini.install_url();
+        assert_eq!(url, "https://github.com/google/generative-ai-cli");
+        assert!(url.contains("github.com"));
+    }
+
+    #[test]
+    fn agent_name_display_name_all_variants() {
+        // Ensure all variants return non-empty display names
+        let agents = vec![AgentName::Claude, AgentName::Codex, AgentName::Gemini];
+        for agent in agents {
+            assert!(!agent.display_name().is_empty());
+        }
+    }
+
+    #[test]
+    fn agent_name_install_url_all_variants() {
+        // Ensure all variants return valid URLs (start with https://)
+        let agents = vec![AgentName::Claude, AgentName::Codex, AgentName::Gemini];
+        for agent in agents {
+            let url = agent.install_url();
+            assert!(url.starts_with("https://"));
+            assert!(!url.is_empty());
+        }
     }
 }
