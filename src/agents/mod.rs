@@ -115,6 +115,23 @@ pub(crate) async fn run_command_with_stdin(
     Ok(stdout)
 }
 
+/// Trait for agent execution
+///
+/// Enables mocking agents in integration tests while using real git mocks.
+/// The trait uses async methods without requiring `async_trait` crate by
+/// returning a boxed future - but since we use `impl Trait` at call sites,
+/// there's no actual boxing overhead for the real implementations.
+pub trait AgentExecutor {
+    /// Execute the agent with the given prompt
+    fn execute(
+        &self,
+        prompt: &str,
+    ) -> impl std::future::Future<Output = Result<String, AgentError>> + Send;
+
+    /// Get the agent name for signatures and error reporting
+    fn name(&self) -> AgentName;
+}
+
 /// Agent enum - closed set of supported AI agents
 ///
 /// Uses enum dispatch (not trait objects) for:
@@ -127,11 +144,8 @@ pub enum Agent {
     Gemini(gemini::GeminiAgent),
 }
 
-impl Agent {
-    /// Execute the agent with the given prompt
-    ///
-    /// Dispatches to the appropriate agent implementation
-    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+impl AgentExecutor for Agent {
+    async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
         match self {
             Self::Claude(agent) => agent.execute(prompt).await,
             Self::Codex(agent) => agent.execute(prompt).await,
@@ -139,8 +153,7 @@ impl Agent {
         }
     }
 
-    /// Get the name of this agent
-    pub fn name(&self) -> AgentName {
+    fn name(&self) -> AgentName {
         match self {
             Self::Claude(_) => AgentName::Claude,
             Self::Codex(_) => AgentName::Codex,
