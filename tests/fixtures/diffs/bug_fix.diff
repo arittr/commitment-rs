@@ -1,0 +1,10 @@
+@@ -10,8 +10,8 @@ impl Parser {
+     pub fn parse(&self, input: &str) -> Result<Ast, Error> {
+-        if input.len() == 0 {
+-            return Err(Error::EmptyInput);
++        if input.is_empty() {
++            return Err(Error::new("input cannot be empty"));
+         }
+         // ... parsing logic
+     }
+ }

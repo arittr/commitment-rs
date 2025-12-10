@@ -1,0 +1,24 @@
+@@ -5,17 +5,15 @@ use crate::response::Response;
+-pub fn handle_get(req: Request) -> Response {
+-    let id = req.params.get("id").unwrap();
+-    let item = db::find(id);
+-    Response::json(item)
+-}
+-
+-pub fn handle_post(req: Request) -> Response {
+-    let body = req.body.parse().unwrap();
+-    let item = db::create(body);
+-    Response::json(item)
+-}
++pub fn handle_request(req: Request) -> Response {
++    match req.method {
++        Method::GET => {
++            let id = req.params.get("id").unwrap();
++            Response::json(db::find(id))
++        }
++        Method::POST => {
++            let body = req.body.parse().unwrap();
++            Response::json(db::create(body))
++        }
++    }
+ }
