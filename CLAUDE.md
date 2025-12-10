@@ -6,9 +6,9 @@ This file provides guidance to Claude Code and other AI coding agents when worki
 
 **commitment-rs** is a Rust port of [commitment](https://github.com/arittr/commitment) - an AI-powered commit message generator. It uses local AI CLI tools (Claude, Codex, or Gemini) to generate conventional commit messages from git diffs.
 
-**Design Philosophy:** Functions over structs. Enum dispatch over trait objects. Newtypes for validation. Let the AI analyze diffs (no complex pattern detection in code).
+**Design Philosophy:** Functions over structs. Enum dispatch over trait objects. Newtypes for validation. Shared infrastructure in parent modules. Let the AI analyze diffs (no complex pattern detection in code).
 
-**Constitution:** See `@docs/constitutions/current/` for architectural rules and patterns.
+**Constitution:** See `docs/constitutions/current/` for architectural rules and patterns (currently v2).
 
 ## Development Commands
 
@@ -36,6 +36,7 @@ cargo run -- --agent claude --dry-run
 cargo test               # Run all tests
 cargo test -- --nocapture  # Show println output
 cargo test <name>        # Run specific test
+cargo test --test integration_tests  # Integration tests only
 
 # Code Quality
 cargo fmt                # Format code
@@ -72,7 +73,7 @@ cargo check              # Fast type check
 │ Git Module  │  │    Agent Module         │
 │ git.rs      │  │ agents/mod.rs           │
 │ • GitProvider│  │ • Agent enum            │
-│   trait     │  │ • generate() function   │
+│   trait     │  │ • Shared infrastructure │
 │ • StagedDiff│  │ • clean_ai_response()   │
 └─────────────┘  └─────────────────────────┘
 ```
@@ -85,15 +86,19 @@ src/
 ├── lib.rs           # Public API: generate_commit_message()
 ├── cli.rs           # clap args + command handlers
 ├── agents/
-│   ├── mod.rs       # Agent enum, generate(), clean_ai_response()
-│   └── claude.rs    # ClaudeAgent (codex.rs, gemini.rs later)
+│   ├── mod.rs       # Agent enum, shared infra, clean_ai_response()
+│   ├── claude.rs    # ClaudeAgent (~20 lines)
+│   ├── codex.rs     # CodexAgent (~20 lines)
+│   └── gemini.rs    # GeminiAgent (~20 lines)
 ├── git.rs           # GitProvider trait, RealGitProvider, StagedDiff
-├── prompt.rs        # build_prompt() - simple template
+├── prompt.rs        # build_prompt(), truncate_diff(), parse_change_summary()
 ├── types.rs         # AgentName enum, ConventionalCommit newtype
 ├── error.rs         # AgentError, GitError, GeneratorError
 └── hooks/
     ├── mod.rs       # HookManager enum + detect/install
     └── managers.rs  # Per-manager install logic
+tests/
+└── integration_tests.rs  # Cross-module integration tests
 ```
 
 ## Key Patterns
@@ -136,6 +141,10 @@ impl ConventionalCommit {
         // Regex check for conventional commit format
     }
 }
+
+// Ergonomic access via Deref and AsRef
+impl Deref for ConventionalCommit { ... }
+impl AsRef<str> for ConventionalCommit { ... }
 ```
 
 **Why:** Once you have a `ConventionalCommit`, it's guaranteed valid. No runtime checks downstream.
@@ -154,7 +163,30 @@ pub async fn generate_commit_message(
 
 **Why:** Minimal state. Rust idiom is "just use a function" unless you need encapsulation.
 
-### 4. Sync Git, Async Agent
+### 4. Shared Agent Infrastructure
+
+Common utilities in `agents/mod.rs`, individual agents are minimal:
+
+```rust
+// agents/mod.rs - shared by all agents
+pub(crate) const AGENT_TIMEOUT: Duration = Duration::from_secs(120);
+
+pub(crate) async fn check_command_exists(command: &str, agent: AgentName) -> Result<(), AgentError>;
+pub(crate) async fn run_command_with_stdin(command: &str, args: &[&str], prompt: &str, agent: AgentName) -> Result<String, AgentError>;
+
+// agents/claude.rs - uses shared infra (~20 lines)
+impl ClaudeAgent {
+    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+        check_command_exists("claude", AgentName::Claude).await?;
+        let output = run_command_with_stdin("claude", &["--print", "-p"], prompt, AgentName::Claude).await?;
+        Ok(clean_ai_response(&output))
+    }
+}
+```
+
+**Why:** DRY. Changes happen once. Agent files stay minimal.
+
+### 5. Sync Git, Async Agent
 
 - `GitProvider` is sync - git operations are fast and local
 - `Agent::execute()` is async - waiting on AI CLI takes time
@@ -173,7 +205,7 @@ impl ClaudeAgent {
 }
 ```
 
-### 5. Error Handling: thiserror + anyhow
+### 6. Error Handling: thiserror + anyhow
 
 - Domain errors use `thiserror` (structured, matchable)
 - CLI boundary uses `anyhow` (easy error chaining)
@@ -191,6 +223,19 @@ pub async fn run_generate(args: GenerateArgs) -> anyhow::Result<()> {
     // AgentError converts to anyhow::Error via ?
 }
 ```
+
+### 7. AgentName Helper Methods
+
+Centralized variant-specific data:
+
+```rust
+impl AgentName {
+    pub fn display_name(&self) -> &'static str { ... }  // "Claude", "Codex", "Gemini"
+    pub fn install_url(&self) -> &'static str { ... }   // Installation docs URL
+}
+```
+
+**Why:** Adding a variant forces handling all cases. Used in error messages.
 
 ## Code Style
 
@@ -262,10 +307,10 @@ Errors describe WHAT happened. CLI layer adds HOW to fix:
 #[error("agent `{agent}` not found in PATH")]
 NotFound { agent: AgentName }
 
-// CLI layer (user-friendly)
+// CLI layer (user-friendly, uses install_url())
 Err(GeneratorError::Agent(AgentError::NotFound { agent })) => {
     eprintln!("{}: agent `{}` not found", style("error").red(), agent);
-    eprintln!("  → Install: https://docs.anthropic.com/claude-cli");
+    eprintln!("  → Install: {}", agent.install_url());
 }
 ```
 
@@ -278,7 +323,7 @@ Core dependencies (from Cargo.toml):
 - `thiserror` - domain error types
 - `anyhow` - CLI error handling
 - `console` + `indicatif` - terminal UX
-- `regex` + `once_cell` - response cleaning
+- `regex` + `once_cell` - response cleaning, diff parsing
 - `serde` + `serde_json` + `serde_yaml` - hook config parsing
 
 ## Git Workflow
@@ -307,23 +352,47 @@ git checkout -b fix/timeout-handling
 1. Create `src/agents/<name>.rs` with struct + execute method
 2. Add variant to `Agent` enum in `src/agents/mod.rs`
 3. Add variant to `AgentName` enum in `src/types.rs`
-4. Update `From<AgentName> for Agent` impl
-5. Update match arms in `Agent::execute()`, `Agent::name()`, etc.
-6. Add tests
+4. Add `display_name()` and `install_url()` match arms
+5. Update `From<AgentName> for Agent` impl
+6. Update match arms in `Agent::execute()`, `Agent::name()`, etc.
+7. Add tests
 
-Example agent (~30 lines):
+Example agent (~20 lines using shared infrastructure):
 
 ```rust
-// src/agents/codex.rs
-pub struct CodexAgent;
+// src/agents/newagent.rs
+use crate::agents::{check_command_exists, clean_ai_response, run_command_with_stdin};
+use crate::error::AgentError;
+use crate::types::AgentName;
 
-impl CodexAgent {
+pub struct NewAgent;
+
+impl NewAgent {
     pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
-        check_command_exists("codex").await?;
-        run_command("codex", &["exec", "--skip-git-repo-check"], Some(prompt), TIMEOUT).await
+        check_command_exists("newagent", AgentName::NewAgent).await?;
+        let output = run_command_with_stdin(
+            "newagent",
+            &["--some-flag"],
+            prompt,
+            AgentName::NewAgent,
+        ).await?;
+        Ok(clean_ai_response(&output))
     }
 }
 ```
+
+## Key Features
+
+### Prompt Enhancements
+
+- **Diff truncation:** Large diffs truncated at 8000 chars to prevent token limits
+- **Change summary:** File count, lines added/removed shown before diff
+- **Marker extraction:** AI responses wrapped in markers for clean extraction
+
+### Hook Safety
+
+- **Lefthook:** Detects existing hooks before installation, warns user
+- **Simple-git-hooks:** Checks package.json for existing config
 
 ## Self-Dogfooding
 

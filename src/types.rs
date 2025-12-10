@@ -47,15 +47,15 @@ impl AgentName {
     /// # Examples
     /// ```
     /// # use commitment_rs::types::AgentName;
-    /// assert!(AgentName::Claude.install_url().contains("anthropic.com"));
-    /// assert!(AgentName::Codex.install_url().contains("github.com"));
-    /// assert!(AgentName::Gemini.install_url().contains("github.com"));
+    /// assert!(AgentName::Claude.install_url().contains("claude.com"));
+    /// assert!(AgentName::Codex.install_url().contains("openai.com"));
+    /// assert!(AgentName::Gemini.install_url().contains("geminicli.com"));
     /// ```
     pub fn install_url(&self) -> &'static str {
         match self {
-            Self::Claude => "https://docs.anthropic.com/en/docs/claude-cli",
-            Self::Codex => "https://github.com/phughk/codex",
-            Self::Gemini => "https://github.com/google/generative-ai-cli",
+            Self::Claude => "https://code.claude.com/docs",
+            Self::Codex => "https://developers.openai.com/codex/cli",
+            Self::Gemini => "https://geminicli.com/docs/get-started/",
         }
     }
 }
@@ -416,22 +416,22 @@ mod tests {
     #[test]
     fn agent_name_install_url_claude() {
         let url = AgentName::Claude.install_url();
-        assert_eq!(url, "https://docs.anthropic.com/en/docs/claude-cli");
-        assert!(url.contains("anthropic.com"));
+        assert_eq!(url, "https://code.claude.com/docs");
+        assert!(url.contains("claude.com"));
     }
 
     #[test]
     fn agent_name_install_url_codex() {
         let url = AgentName::Codex.install_url();
-        assert_eq!(url, "https://github.com/phughk/codex");
-        assert!(url.contains("github.com"));
+        assert_eq!(url, "https://developers.openai.com/codex/cli");
+        assert!(url.contains("openai.com"));
     }
 
     #[test]
     fn agent_name_install_url_gemini() {
         let url = AgentName::Gemini.install_url();
-        assert_eq!(url, "https://github.com/google/generative-ai-cli");
-        assert!(url.contains("github.com"));
+        assert_eq!(url, "https://geminicli.com/docs/get-started/");
+        assert!(url.contains("geminicli.com"));
     }
 
     #[test]
