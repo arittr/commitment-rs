@@ -117,12 +117,21 @@ pub async fn run_generate(args: GenerateArgs) -> Result<()> {
     // Generate default signature based on agent
     let signature = format!(
         "🤖 Generated with {} via commitment",
-        match agent_name {
-            AgentName::Claude => "Claude",
-            AgentName::Codex => "Codex",
-            AgentName::Gemini => "Gemini",
-        }
+        agent_name.display_name()
     );
+
+    // Get staged diff for display
+    let diff = git.get_staged_diff().map_err(|e| match e {
+        GitError::NoStagedChanges => {
+            anyhow::anyhow!("No staged changes to commit. Use 'git add' to stage files.")
+        }
+        other => anyhow::anyhow!("Failed to get staged diff: {}", other),
+    })?;
+
+    // Display staged files before spinner (respecting flags)
+    if !args.quiet && !args.message_only {
+        display_staged_files(&diff.name_status);
+    }
 
     // Show spinner unless quiet or message-only mode
     let spinner = if !args.quiet && !args.message_only {
@@ -228,6 +237,29 @@ pub async fn run_init(hook_manager: Option<String>, agent: String) -> Result<()>
     Ok(())
 }
 
+/// Display staged files list
+///
+/// Formats and prints the name-status output from git diff.
+/// Output format:
+/// ```text
+/// Staged changes:
+///   M  src/file.rs
+///   A  src/new.rs
+/// ```
+fn display_staged_files(name_status: &str) {
+    if name_status.is_empty() {
+        return;
+    }
+
+    eprintln!("{}", style("Staged changes:").bold());
+    for line in name_status.lines() {
+        if !line.is_empty() {
+            eprintln!("  {}", line);
+        }
+    }
+    eprintln!();
+}
+
 /// Format error messages with helpful hints
 fn format_error(error: &GeneratorError, args: &GenerateArgs) {
     eprintln!("{} {}", style("error:").red().bold(), error);
@@ -238,17 +270,7 @@ fn format_error(error: &GeneratorError, args: &GenerateArgs) {
         GeneratorError::Agent(agent_err) => match agent_err {
             AgentError::NotFound { agent } => {
                 eprintln!("{} Installation instructions:", style("hint:").yellow());
-                match agent {
-                    AgentName::Claude => {
-                        eprintln!("  Claude CLI: https://docs.anthropic.com/en/docs/claude-cli");
-                    }
-                    AgentName::Codex => {
-                        eprintln!("  Codex CLI: https://github.com/phughk/codex");
-                    }
-                    AgentName::Gemini => {
-                        eprintln!("  Gemini CLI: https://github.com/google/generative-ai-cli");
-                    }
-                }
+                eprintln!("  {} CLI: {}", agent.display_name(), agent.install_url());
             }
             AgentError::ExecutionFailed { agent, stderr } => {
                 eprintln!("{} Agent execution details:", style("hint:").yellow());
@@ -460,5 +482,27 @@ mod tests {
         assert!(!args.message_only);
         assert!(!args.quiet);
         assert!(args.verbose);
+    }
+
+    #[test]
+    fn display_staged_files_formats_correctly() {
+        // Test with typical git name-status output
+        let name_status = "M\tsrc/file.rs\nA\tsrc/new.rs\nD\tsrc/old.rs";
+
+        // We can't easily test console output, but we can verify the function doesn't panic
+        display_staged_files(name_status);
+    }
+
+    #[test]
+    fn display_staged_files_handles_empty() {
+        // Should handle empty string without panicking
+        display_staged_files("");
+    }
+
+    #[test]
+    fn display_staged_files_handles_blank_lines() {
+        // Should skip blank lines
+        let name_status = "M\tsrc/file.rs\n\nA\tsrc/new.rs\n";
+        display_staged_files(name_status);
     }
 }
