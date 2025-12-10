@@ -31,14 +31,12 @@ static MULTIPLE_NEWLINES: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\n{3,}").expect("valid regex pattern"));
 
 /// Shared timeout for all agents (120 seconds)
-#[allow(dead_code)] // Used in later phases
 pub(crate) const AGENT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Check if a CLI command exists in PATH
 ///
 /// Uses `which` to check for command availability.
 /// Returns NotFound error with the specified agent name if command doesn't exist.
-#[allow(dead_code)] // Used in later phases
 pub(crate) async fn check_command_exists(
     command: &str,
     agent: AgentName,
@@ -64,7 +62,6 @@ pub(crate) async fn check_command_exists(
 ///
 /// # Returns
 /// The stdout output from the command if successful
-#[allow(dead_code)] // Used in later phases
 pub(crate) async fn run_command_with_stdin(
     command: &str,
     args: &[&str],
