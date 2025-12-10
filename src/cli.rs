@@ -111,10 +111,7 @@ pub async fn run_generate(args: GenerateArgs) -> Result<()> {
     let agent = Agent::from(agent_name);
 
     // Generate default signature based on agent
-    let signature = format!(
-        "🤖 Generated with {} via commitment",
-        agent_name.display_name()
-    );
+    let signature = agent_name.commit_signature();
 
     // Get staged diff for display
     let diff = git.get_staged_diff().map_err(|e| match e {
