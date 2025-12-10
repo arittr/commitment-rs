@@ -4,6 +4,7 @@ pre-commit:
   commands:
     lint:
       run: just lint
+      stage_fixed: true
     test:
       run: just test
     build:

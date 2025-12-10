@@ -14,16 +14,38 @@ pub fn build_prompt(diff: &StagedDiff) -> String {
     let mut prompt = String::new();
 
     // Instructions for conventional commit format
-    prompt.push_str("Generate a conventional commit message for the following git changes.\n\n");
-    prompt.push_str("Format requirements:\n");
-    prompt.push_str("- Start with type: feat, fix, docs, style, refactor, test, chore, perf, build, ci, or revert\n");
-    prompt.push_str("- Optional scope in parentheses: type(scope): description\n");
-    prompt.push_str("- Description: short summary in imperative mood\n");
-    prompt.push_str("- Optional body: detailed explanation (separated by blank line)\n\n");
+    prompt.push_str("Generate a professional commit message based on the actual code changes.\n\n");
+    prompt.push_str("Requirements:\n");
+    prompt.push_str("1. ANALYZE THE ACTUAL CODE CHANGES - don't guess based on file names\n");
+    prompt.push_str(
+        "2. Clear, descriptive title (50 chars or less) following conventional commits\n",
+    );
+    prompt.push_str("   - Start with type: feat, fix, docs, style, refactor, test, chore, perf, build, ci, or revert\n");
+    prompt.push_str("   - Optional scope in parentheses: type(scope): description\n");
+    prompt.push_str("3. Be CONCISE - match detail level to scope of changes:\n");
+    prompt.push_str("   - Single file/method: 2-4 bullet points max\n");
+    prompt.push_str("   - Multiple files: 4-6 bullet points max\n");
+    prompt.push_str("   - Major refactor: 6+ bullet points as needed\n");
+    prompt.push_str("4. Use imperative mood (\"Add feature\" not \"Added feature\")\n");
+    prompt.push_str("5. Format: Title + blank line + bullet point details (use - prefix)\n");
+    prompt.push_str("6. Focus on the most important changes from the diff:\n");
+    prompt.push_str("   - Key functionality added/modified/removed\n");
+    prompt.push_str("   - Significant logic or behavior changes\n");
+    prompt.push_str("   - Important architectural changes\n");
+    prompt.push_str("7. Avoid over-describing implementation details for small changes\n");
+    prompt.push_str("8. DO NOT include preamble like \"Looking at the changes\"\n");
+    prompt.push_str("9. Start directly with the action (\"Add\", \"Fix\", \"Update\", etc.)\n");
+    prompt.push_str("10. Quality over quantity - fewer, more meaningful bullet points\n\n");
 
-    prompt.push_str("Wrap your commit message with markers:\n");
+    prompt.push_str("Example format:\n");
+    prompt.push_str("feat: add user authentication system\n\n");
+    prompt.push_str("- Implement JWT-based authentication flow\n");
+    prompt.push_str("- Add login/logout endpoints in auth routes\n");
+    prompt.push_str("- Create user session management middleware\n\n");
+
+    prompt.push_str("Return ONLY the commit message content between these markers:\n");
     prompt.push_str("<<<COMMIT_MESSAGE_START>>>\n");
-    prompt.push_str("<your commit message here>\n");
+    prompt.push_str("(commit message goes here)\n");
     prompt.push_str("<<<COMMIT_MESSAGE_END>>>\n\n");
 
     // File statistics section
@@ -67,9 +89,13 @@ mod tests {
         let diff = StagedDiff::default();
         let prompt = build_prompt(&diff);
 
-        assert!(prompt.contains("conventional commit message"));
+        assert!(prompt.contains("conventional commits"));
         assert!(prompt.contains("feat, fix, docs"));
         assert!(prompt.contains("type(scope): description"));
+        // New format requirements
+        assert!(prompt.contains("bullet point"));
+        assert!(prompt.contains("imperative mood"));
+        assert!(prompt.contains("Quality over quantity"));
     }
 
     #[test]
@@ -151,7 +177,7 @@ mod tests {
         let prompt = build_prompt(&diff);
 
         // Verify all sections present
-        assert!(prompt.contains("conventional commit"));
+        assert!(prompt.contains("conventional commits"));
         assert!(prompt.contains("<<<COMMIT_MESSAGE_START>>>"));
         assert!(prompt.contains("<<<COMMIT_MESSAGE_END>>>"));
         assert!(prompt.contains("=== FILE STATISTICS ==="));
@@ -160,6 +186,9 @@ mod tests {
         assert!(prompt.contains("M\tsrc/main.rs"));
         assert!(prompt.contains("=== FULL DIFF ==="));
         assert!(prompt.contains("println!(\"test\")"));
+        // Verify example format present
+        assert!(prompt.contains("Example format:"));
+        assert!(prompt.contains("- Implement JWT"));
     }
 
     #[test]
