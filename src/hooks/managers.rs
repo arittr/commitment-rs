@@ -28,6 +28,19 @@ pub fn install_lefthook(cwd: &Path, agent: &AgentName) -> Result<(), HookError> 
     // Read existing config or create new one
     let mut config: LefthookConfig = if config_path.exists() {
         let content = fs::read_to_string(&config_path).map_err(HookError::Io)?;
+
+        // Check if prepare-commit-msg hook already exists
+        if content.contains("prepare-commit-msg:") {
+            eprintln!(
+                "{}: lefthook.yml already has prepare-commit-msg hook, skipping installation",
+                console::style("Warning").yellow()
+            );
+            eprintln!(
+                "  → To enable commitment, manually add the commitment command to your existing hook"
+            );
+            return Ok(());
+        }
+
         serde_yaml::from_str(&content).map_err(|e| HookError::ConfigParseFailed {
             reason: e.to_string(),
         })?
@@ -391,5 +404,61 @@ pre-commit:
         let dir = TempDir::new().unwrap();
         let result = install_plain_git(dir.path(), &AgentName::Claude);
         assert!(matches!(result, Err(HookError::GitDirResolutionFailed)));
+    }
+
+    #[test]
+    fn install_lefthook_skips_when_hook_exists() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("lefthook.yml");
+
+        // Create existing config with prepare-commit-msg hook
+        fs::write(
+            &config_path,
+            r#"
+prepare-commit-msg:
+  commands:
+    custom:
+      run: echo "existing hook"
+"#,
+        )
+        .unwrap();
+
+        // Install should return Ok without modifying file
+        let result = install_lefthook(dir.path(), &AgentName::Claude);
+        assert!(result.is_ok());
+
+        // Config should be unchanged
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("custom"));
+        assert!(content.contains("existing hook"));
+        assert!(!content.contains("commitment"));
+    }
+
+    #[test]
+    fn install_lefthook_proceeds_when_hook_absent() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("lefthook.yml");
+
+        // Create existing config without prepare-commit-msg hook
+        fs::write(
+            &config_path,
+            r#"
+pre-commit:
+  commands:
+    lint:
+      run: npm run lint
+"#,
+        )
+        .unwrap();
+
+        // Install should succeed
+        let result = install_lefthook(dir.path(), &AgentName::Claude);
+        assert!(result.is_ok());
+
+        // Config should have commitment hook added
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("pre-commit"));
+        assert!(content.contains("prepare-commit-msg"));
+        assert!(content.contains("commitment"));
     }
 }
