@@ -17,9 +17,9 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// AI agent to use for generation
-    #[arg(long, default_value = "claude", global = true)]
-    pub agent: String,
+    /// AI agent to use for generation (claude, codex, gemini)
+    #[arg(long, default_value_t = AgentName::default_agent(), global = true)]
+    pub agent: AgentName,
 
     /// Generate message without committing
     #[arg(long, global = true)]
@@ -50,9 +50,9 @@ pub enum Command {
         #[arg(long)]
         hook_manager: Option<String>,
 
-        /// Default agent for hooks
-        #[arg(long, default_value = "claude")]
-        agent: String,
+        /// Default agent for hooks (claude, codex, gemini)
+        #[arg(long, default_value_t = AgentName::default_agent())]
+        agent: AgentName,
     },
 }
 
@@ -83,7 +83,7 @@ impl Cli {
 /// Arguments for generate command
 #[derive(Debug)]
 pub struct GenerateArgs {
-    pub agent: String,
+    pub agent: AgentName,
     pub dry_run: bool,
     pub message_only: bool,
     pub quiet: bool,
@@ -93,11 +93,7 @@ pub struct GenerateArgs {
 
 /// Run the generate command
 pub async fn run_generate(args: GenerateArgs) -> Result<()> {
-    // Parse agent name
-    let agent_name: AgentName = args
-        .agent
-        .parse()
-        .context(format!("Invalid agent name '{}'", args.agent))?;
+    let agent_name = args.agent;
 
     if args.verbose {
         eprintln!("{} Using agent: {}", style("debug:").cyan(), agent_name);
@@ -195,12 +191,7 @@ pub async fn run_generate(args: GenerateArgs) -> Result<()> {
 }
 
 /// Run the init command
-pub async fn run_init(hook_manager: Option<String>, agent: String) -> Result<()> {
-    // Parse agent name
-    let agent_name: AgentName = agent
-        .parse()
-        .context(format!("Invalid agent name '{}'", agent))?;
-
+pub async fn run_init(hook_manager: Option<String>, agent: AgentName) -> Result<()> {
     // Determine hook manager (detect or use specified)
     let manager = if let Some(manager_str) = hook_manager {
         // User specified a manager
@@ -217,17 +208,17 @@ pub async fn run_init(hook_manager: Option<String>, agent: String) -> Result<()>
         "{} Installing {} hook for agent {}...",
         style("→").blue(),
         manager,
-        agent_name
+        agent
     );
 
     // Install hook
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    install_hook(manager, &cwd, &agent_name).context("Failed to install hook")?;
+    install_hook(manager, &cwd, &agent).context("Failed to install hook")?;
 
     eprintln!("{} Hook installed successfully", style("✓").green().bold());
     eprintln!();
     eprintln!("  Manager: {}", manager);
-    eprintln!("  Agent: {}", agent_name);
+    eprintln!("  Agent: {}", agent);
     eprintln!();
     eprintln!(
         "{} Commit messages will now be generated automatically",
@@ -378,7 +369,7 @@ mod tests {
     fn cli_parses_with_defaults() {
         let cli = Cli::parse_from(["commitment"]);
         assert!(cli.command.is_none());
-        assert_eq!(cli.agent, "claude");
+        assert_eq!(cli.agent, AgentName::Claude);
         assert!(!cli.dry_run);
         assert!(!cli.message_only);
         assert!(!cli.quiet);
@@ -389,7 +380,7 @@ mod tests {
     #[test]
     fn cli_parses_agent_flag() {
         let cli = Cli::parse_from(["commitment", "--agent", "codex"]);
-        assert_eq!(cli.agent, "codex");
+        assert_eq!(cli.agent, AgentName::Codex);
     }
 
     #[test]
@@ -444,7 +435,7 @@ mod tests {
         let cli = Cli::parse_from(["commitment", "init", "--agent", "gemini"]);
         match cli.command {
             Some(Command::Init { agent, .. }) => {
-                assert_eq!(agent, "gemini");
+                assert_eq!(agent, AgentName::Gemini);
             }
             _ => panic!("Expected Init command"),
         }
@@ -461,7 +452,7 @@ mod tests {
             "--cwd",
             "/tmp",
         ]);
-        assert_eq!(cli.agent, "codex");
+        assert_eq!(cli.agent, AgentName::Codex);
         assert!(cli.dry_run);
         assert!(cli.quiet);
         assert_eq!(cli.cwd, PathBuf::from("/tmp"));
@@ -470,14 +461,14 @@ mod tests {
     #[test]
     fn generate_args_construction() {
         let args = GenerateArgs {
-            agent: "claude".to_string(),
+            agent: AgentName::Claude,
             dry_run: true,
             message_only: false,
             quiet: false,
             verbose: true,
             cwd: PathBuf::from("."),
         };
-        assert_eq!(args.agent, "claude");
+        assert_eq!(args.agent, AgentName::Claude);
         assert!(args.dry_run);
         assert!(!args.message_only);
         assert!(!args.quiet);

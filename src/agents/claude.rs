@@ -12,15 +12,16 @@ impl ClaudeAgent {
     /// Uses `claude --print` to output without interactive confirmation.
     /// The prompt is passed via stdin.
     pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
-        check_command_exists("claude", AgentName::Claude).await?;
+        let agent = AgentName::Claude;
+        check_command_exists(agent.command_name(), agent).await?;
 
         tokio::time::timeout(
             AGENT_TIMEOUT,
-            run_command_with_stdin("claude", &["--print"], prompt, AgentName::Claude),
+            run_command_with_stdin(agent.command_name(), &["--print"], prompt, agent),
         )
         .await
         .map_err(|_| AgentError::Timeout {
-            agent: AgentName::Claude,
+            agent,
             timeout_secs: AGENT_TIMEOUT.as_secs(),
         })?
     }
