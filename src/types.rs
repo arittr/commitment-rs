@@ -58,6 +58,35 @@ impl AgentName {
             Self::Gemini => "https://geminicli.com/docs/get-started/",
         }
     }
+
+    /// Get the CLI command name for the agent
+    ///
+    /// Returns the executable name to invoke this agent from the command line.
+    /// This is the canonical source for command names - use this instead of
+    /// hardcoding strings like `"claude"`.
+    ///
+    /// # Examples
+    /// ```
+    /// # use commitment_rs::types::AgentName;
+    /// assert_eq!(AgentName::Claude.command_name(), "claude");
+    /// assert_eq!(AgentName::Codex.command_name(), "codex");
+    /// assert_eq!(AgentName::Gemini.command_name(), "gemini");
+    /// ```
+    pub fn command_name(&self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    /// Get the default agent
+    ///
+    /// Returns Claude as the default agent. Use this instead of hardcoding
+    /// `"claude"` in default values.
+    pub fn default_agent() -> Self {
+        Self::Claude
+    }
 }
 
 impl FromStr for AgentName {
@@ -77,11 +106,7 @@ impl FromStr for AgentName {
 
 impl fmt::Display for AgentName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Claude => write!(f, "claude"),
-            Self::Codex => write!(f, "codex"),
-            Self::Gemini => write!(f, "gemini"),
-        }
+        write!(f, "{}", self.command_name())
     }
 }
 
