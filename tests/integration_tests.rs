@@ -309,16 +309,48 @@ async fn signature_appending_integration() {
     let response = mock_agent.execute(&prompt).await.unwrap();
     let cleaned = clean_ai_response(&response);
 
-    // Append signature
-    let signature = "Co-Authored-By: AI <ai@example.com>";
+    // Test with actual signature format used by the tool
+    let signature = AgentName::Claude.commit_signature();
     let final_message = format!("{}\n\n{}", cleaned, signature);
 
     // Validate
     let commit = ConventionalCommit::validate(&final_message).unwrap();
 
-    // Verify signature is present
-    assert!(commit.as_str().contains("Co-Authored-By:"));
+    // Verify signature matches expected format
+    assert!(
+        commit
+            .as_str()
+            .contains("🤖 Generated with Claude via commitment")
+    );
     assert!(commit.as_str().contains("feat: add feature"));
+}
+
+#[tokio::test]
+async fn commit_signature_format_for_all_agents() {
+    // Verify each agent produces the expected signature format
+    let test_cases = vec![
+        (AgentName::Claude, "🤖 Generated with Claude via commitment"),
+        (AgentName::Codex, "🤖 Generated with Codex via commitment"),
+        (AgentName::Gemini, "🤖 Generated with Gemini via commitment"),
+    ];
+
+    for (agent, expected_signature) in test_cases {
+        let signature = agent.commit_signature();
+        assert_eq!(
+            signature, expected_signature,
+            "Signature mismatch for {:?}",
+            agent
+        );
+
+        // Verify signature can be appended to a valid commit
+        let commit_with_sig = format!("feat: add feature\n\n{}", signature);
+        let commit = ConventionalCommit::validate(&commit_with_sig);
+        assert!(
+            commit.is_ok(),
+            "Commit with {} signature should be valid",
+            agent
+        );
+    }
 }
 
 #[tokio::test]
