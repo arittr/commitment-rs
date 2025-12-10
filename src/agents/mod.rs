@@ -1,0 +1,294 @@
+pub mod claude;
+pub mod codex;
+pub mod gemini;
+
+use crate::error::AgentError;
+use crate::types::AgentName;
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+// Regex patterns for response cleaning (compiled once with Lazy)
+static MARKER_EXTRACT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"<<<COMMIT_MESSAGE_START>>>([\s\S]*?)<<<COMMIT_MESSAGE_END>>>")
+        .expect("valid regex pattern")
+});
+
+static CODE_BLOCK: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"```(?:[a-z]*\n)?([\s\S]*?)```").expect("valid regex pattern"));
+
+static PREAMBLE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^(here is|here's|the commit message|commit message).*?:\s*")
+        .expect("valid regex pattern")
+});
+
+static THINKING_TAGS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<thinking>[\s\S]*?</thinking>").expect("valid regex pattern"));
+
+static MULTIPLE_NEWLINES: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\n{3,}").expect("valid regex pattern"));
+
+/// Agent enum - closed set of supported AI agents
+///
+/// Uses enum dispatch (not trait objects) for:
+/// - No heap allocation
+/// - Exhaustive matching
+/// - No async_trait needed
+pub enum Agent {
+    Claude(claude::ClaudeAgent),
+    Codex(codex::CodexAgent),
+    Gemini(gemini::GeminiAgent),
+}
+
+impl Agent {
+    /// Execute the agent with the given prompt
+    ///
+    /// Dispatches to the appropriate agent implementation
+    pub async fn execute(&self, prompt: &str) -> Result<String, AgentError> {
+        match self {
+            Self::Claude(agent) => agent.execute(prompt).await,
+            Self::Codex(agent) => agent.execute(prompt).await,
+            Self::Gemini(agent) => agent.execute(prompt).await,
+        }
+    }
+
+    /// Get the name of this agent
+    pub fn name(&self) -> AgentName {
+        match self {
+            Self::Claude(_) => AgentName::Claude,
+            Self::Codex(_) => AgentName::Codex,
+            Self::Gemini(_) => AgentName::Gemini,
+        }
+    }
+}
+
+impl From<AgentName> for Agent {
+    fn from(name: AgentName) -> Self {
+        match name {
+            AgentName::Claude => Self::Claude(claude::ClaudeAgent),
+            AgentName::Codex => Self::Codex(codex::CodexAgent),
+            AgentName::Gemini => Self::Gemini(gemini::GeminiAgent),
+        }
+    }
+}
+
+/// Clean AI response by removing common artifacts
+///
+/// Pipeline (order matters):
+/// 1. Extract between <<<COMMIT_MESSAGE_START>>> and <<<COMMIT_MESSAGE_END>>> markers
+/// 2. Remove markdown code blocks (```...```)
+/// 3. Remove preambles ("Here is the commit message:", etc.)
+/// 4. Remove thinking tags (<thinking>...</thinking>)
+/// 5. Collapse 3+ newlines to 2
+/// 6. Trim whitespace
+pub fn clean_ai_response(raw: &str) -> String {
+    let mut cleaned = raw.to_string();
+
+    // Step 1: Extract between markers if present
+    if let Some(captures) = MARKER_EXTRACT.captures(&cleaned)
+        && let Some(content) = captures.get(1)
+    {
+        cleaned = content.as_str().to_string();
+    }
+
+    // Step 2: Remove markdown code blocks (extract content inside)
+    cleaned = CODE_BLOCK.replace_all(&cleaned, "$1").to_string();
+
+    // Step 3: Remove preambles
+    cleaned = PREAMBLE.replace_all(&cleaned, "").to_string();
+
+    // Step 4: Remove thinking tags
+    cleaned = THINKING_TAGS.replace_all(&cleaned, "").to_string();
+
+    // Step 5: Collapse multiple newlines
+    cleaned = MULTIPLE_NEWLINES.replace_all(&cleaned, "\n\n").to_string();
+
+    // Step 6: Trim whitespace
+    cleaned.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_ai_response_with_markers() {
+        let input = "Some preamble\n<<<COMMIT_MESSAGE_START>>>feat: add feature<<<COMMIT_MESSAGE_END>>>\nSome postamble";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_code_blocks() {
+        let input = "```\nfeat: add feature\n```";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_inline_code_block() {
+        let input = "```feat: add feature```";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_language_code_block() {
+        let input = "```text\nfeat: add feature\n```";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_preamble_here_is() {
+        let input = "Here is the commit message:\nfeat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_preamble_heres() {
+        let input = "Here's the commit message:\nfeat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_preamble_the_commit() {
+        let input = "The commit message:\nfeat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_preamble_case_insensitive() {
+        let input = "HERE IS THE COMMIT MESSAGE:\nfeat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_thinking_tags() {
+        let input = "<thinking>Let me analyze this diff...</thinking>\nfeat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_thinking_multiline() {
+        let input =
+            "<thinking>\nLet me analyze...\nThis is a feature\n</thinking>\nfeat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_with_multiple_newlines() {
+        let input = "feat: add feature\n\n\n\nSome body text";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature\n\nSome body text");
+    }
+
+    #[test]
+    fn clean_ai_response_collapses_many_newlines() {
+        let input = "feat: add feature\n\n\n\n\n\nSome body";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature\n\nSome body");
+    }
+
+    #[test]
+    fn clean_ai_response_preserves_double_newlines() {
+        let input = "feat: add feature\n\nSome body text";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature\n\nSome body text");
+    }
+
+    #[test]
+    fn clean_ai_response_trims_whitespace() {
+        let input = "  \n  feat: add feature  \n  ";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_complex_combination() {
+        let input = r#"
+<thinking>
+Let me analyze this diff to create a commit message.
+</thinking>
+
+Here is the commit message:
+
+```
+<<<COMMIT_MESSAGE_START>>>
+feat(api): add user authentication
+
+
+
+This implements JWT-based authentication.
+<<<COMMIT_MESSAGE_END>>>
+```
+"#;
+        let result = clean_ai_response(input);
+        assert_eq!(
+            result,
+            "feat(api): add user authentication\n\nThis implements JWT-based authentication."
+        );
+    }
+
+    #[test]
+    fn clean_ai_response_plain_message() {
+        let input = "feat: add feature";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "feat: add feature");
+    }
+
+    #[test]
+    fn clean_ai_response_empty_string() {
+        let input = "";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn clean_ai_response_whitespace_only() {
+        let input = "   \n   \n   ";
+        let result = clean_ai_response(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn agent_name_returns_correct_variant_claude() {
+        let agent = Agent::Claude(claude::ClaudeAgent);
+        assert_eq!(agent.name(), AgentName::Claude);
+    }
+
+    #[test]
+    fn agent_name_returns_correct_variant_codex() {
+        let agent = Agent::Codex(codex::CodexAgent);
+        assert_eq!(agent.name(), AgentName::Codex);
+    }
+
+    #[test]
+    fn agent_name_returns_correct_variant_gemini() {
+        let agent = Agent::Gemini(gemini::GeminiAgent);
+        assert_eq!(agent.name(), AgentName::Gemini);
+    }
+
+    #[test]
+    fn agent_from_agent_name_claude() {
+        let agent = Agent::from(AgentName::Claude);
+        assert_eq!(agent.name(), AgentName::Claude);
+    }
+
+    #[test]
+    fn agent_from_agent_name_codex() {
+        let agent = Agent::from(AgentName::Codex);
+        assert_eq!(agent.name(), AgentName::Codex);
+    }
+
+    #[test]
+    fn agent_from_agent_name_gemini() {
+        let agent = Agent::from(AgentName::Gemini);
+        assert_eq!(agent.name(), AgentName::Gemini);
+    }
+}
